@@ -316,8 +316,88 @@ app 查 `entitlements["premium"]?.isActive` 就会拿到 true。
 
 工具：`rc.patch`（默认 entitlement id 是 `premium`）、`rc.info`（看运行时状态）。
 
-**注意**：`fake` 是 `alloc/init` 出来的空对象，除了被 hook 的那几个方法，
-其他属性（`productIdentifier` / `expirationDate`）会返回 nil。如果 app 读它们时
-没有判空，可能崩溃或逻辑异常 —— 这是这个方案的主要风险点。
+### 最终结论：失败（2026-11-22 14:58）
 
-实测结论待补。
+#### 一、UserDefaults 写入保护是有效的
+
+用 `guard.add key=premium` 拦住 `setObject:forKey:`，重启后数据**真的保住了**：
+
+```
+premium        {"isActive":true,...}    ← 之前每次被覆盖成 false，这次保住了
+userDetail.vip true
+guard          active:["premium"]
+```
+
+**但这个成功反而证明了更深的问题**：本地两个会员字段都是 true，UI 的锁依然锁着。
+说明 **Grow 的会员判断完全不读 UserDefaults**，它直接查 RevenueCat 的 `CustomerInfo`。
+
+#### 二、RevenueCat 这条路走不通
+
+| 尝试 | 结果 |
+|---|---|
+| hook `RCEntitlementInfo.isActive` / `isActiveInAnyEnvironment` / `isActiveInCurrentEnvironment` / `willRenew` / `periodType` | 装上，**hits=0**。entitlements 是空字典，方法压根没人调 |
+| `RCPurchases.cachedCustomerInfo` 实测值 | `activeEntitlements=[:]  activeSubscriptions=[:]  entitlements=[:]`，`verification=VerificationResult.verified` |
+| `rc.patch` 伪造 entitlement | **崩**（连接断开，进程死） |
+| 单独测 `[[RCEntitlementInfo alloc] init]` 的第一步 `alloc` | **崩** |
+
+**`alloc` 崩的原因**：`RCEntitlementInfo` 是 Swift 类。Swift 对象的创建必须走
+Swift 运行时（`swift_allocObject` + 正确的 metadata）。用 ObjC 的 `+alloc` 拿到的是
+没有 Swift 元数据的裸内存，一碰就 SIGSEGV。同理 `RCEntitlementInfos` 也造不出来。
+
+**所以客户端无法伪造 RevenueCat 的权益对象**，这是硬限制。
+
+#### 三、为什么本地改不动会员（根因）
+
+```
+RevenueCat 服务端签发 CustomerInfo（带 verification=verified）
+        ↓
+Grow 启动时校验并解析 entitunds
+        ↓
+算出会员状态 → 存进内存单例（也顺手写一份 UserDefaults 当缓存）
+        ↓
+SwiftUI 从内存单例读 → 渲染锁
+```
+
+我只动了最下游的"缓存"那一层。上游的内存单例和 RevenueCat 数据都没变，所以 UI 不变。
+要动上游就必须 hook RevenueCat 或 Swift 单例，两条都被堵死（前者对象造不出、后者是 Swift）。
+
+#### 四、完整失败清单（后续不要再试）
+
+| 手段 | 结果 | 原因 |
+|---|---|---|
+| 改 UserDefaults 数据 | 数据保住了，UI 不变 | UI 不读它 |
+| 拦 UserDefaults **写入** | ✅ 有效 | 但只解决"被覆盖"，不解决"不被读" |
+| 拦 UserDefaults **读取** | ❌ 崩（两次） | CFPreferences 桥接，替换 IMP 破坏内部状态 |
+| hook `RCEntitlementInfo` 判断方法 | ❌ hits=0 | 空字典，方法不被调用 |
+| 造 `RCEntitlementInfo` / `RCEntitlementInfos` | ❌ alloc 就崩 | Swift 类必须由 Swift 运行时创建 |
+| IOHID 真实触摸 | ❌ 无响应 | `hid.status` 全绿但事件被系统丢弃，缺 `com.apple.private.hid.client.event-dispatch` |
+| accessibility 激活 | ❌ 0 个元素 | SwiftUI 只在辅助功能开启时才建 accessibility 树 |
+| 静态 patch 二进制 | ❌ 无锚点 | `isActive` / `periodType` / `entitlements` 字符串**0 处代码引用**（Swift 用 CodingKeys 间接寻址） |
+
+#### 五、如果一定要做，只剩两条
+
+**A. MITM 劫持 RevenueCat 响应**
+
+RevenueCat 走 HTTPS API（`api.revenuecat.com`）。如果能拦截并替换响应里的
+`entitlements`，客户端就会当真。前提：app 没做证书 pinning（RevenueCat 默认不 pin）。
+
+需要：Charles/Proxyman + CA 证书装到手机 + WiFi 代理指向电脑。
+
+**B. 真越狱 + IAP 插件**
+
+palera1n / unc0ver 那类真越狱，配合处理 StoreKit 收据的插件。
+TrollStore 的 CoreTrust 绕过不提供这个能力。
+
+#### 六、工具在这轮获得的能力（可复用）
+
+| 工具 | 说明 |
+|---|---|
+| `guard.add key=xxx` | 拦住 UserDefaults 指定 key 的写入，**这是本轮最有价值的产出**，能保住任何被 app 覆盖的配置 |
+| `guard.list` / `guard.remove` | 管理保护列表，落在 `guards.json`，启动时自动装 |
+| `hid.status` / `hid.tap` | 触摸注入诊断（符号就绪 ≠ 事件生效） |
+| `rc.info` | 看 RevenueCat 运行时 CustomerInfo |
+| `ui.ax` / `ui.axTap` | accessibility 遍历/激活（SwiftUI 备选） |
+| `deploy.test` / `/api/deploy` | dylib 自更新验证 |
+
+**`guard.add` 的通用价值**：任何"改了被 app 覆盖"的配置项，都可以用它固化。
+用法是：先 `guard.remove` → 写值 → `guard.add`（保护开启时连自己的写入也会被拦）。

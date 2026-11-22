@@ -84,11 +84,18 @@
 | POST | `/api/defaults` | body 是 suite 名（空则标准域），返回 JSON |
 | POST | `/api/write?path=...` | body 直接写成文件 |
 
+### 热更新
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/deploy` | body 是新 dylib 二进制，存到沙盒 stage 目录 |
+| GET | `/api/deploy/status` | 看 stage 状态（是否已就位、上次是否失败） |
+
 ---
 
-## 二、内置工具（21 个）
+## 二、内置工具（31 个）
 
-### 看
+### 看（7）
 
 | 工具 | 参数 | 说明 |
 |---|---|---|
@@ -98,42 +105,68 @@
 | `ui.shot` | `q` | 截图，返回 `data:image/jpeg;base64,...` |
 | `screen.size` | — | 屏幕尺寸 / 缩放 / 安全区 |
 | `app.paths` | — | 日志/配置的实际路径（排查用） |
+| `ui.ax` | — | accessibility 元素表（SwiftUI 界面备选，多数情况返回 0 个） |
 
 `ui.tree` 返回示例：
 
 ```json
 {"count":57,"items":[
   {"i":38,"cls":"UIButton","tap":true,"cx":373,"cy":749,"w":30,"h":30},
-  {"i":42,"cls":"UITabBarButton","tap":true,"cx":40,"cy":794,"text":"今天"},
-  {"i":56,"cls":"UITabBarButtonLabel","tap":false,"cx":353,"cy":810,"text":"洞悉"}
+  {"i":42,"cls":"UITabBarButton","tap":true,"cx":40,"cy":794,"text":"今天"}
 ]}
 ```
 
-### 点
+### 点（10）
 
 | 工具 | 参数 | 说明 |
 |---|---|---|
-| `ui.tap` | `x`,`y` | 屏幕坐标点击（真实触摸） |
-| `ui.tapRatio` | `rx`,`ry` | 0-1 相对坐标点击，适配机型 |
-| `ui.tapText` | `text`,`index` | 按文字找元素并点击 |
+| `ui.tap` | `x`,`y` | 屏幕坐标点击（IOHID 真实触摸，**可能被系统丢弃**） |
+| `ui.tapRatio` | `rx`,`ry` | 0-1 相对坐标点击 |
+| `ui.tapText` | `text`,`index` | 按文字找元素并点击（走 UIControl sendActions，**最可靠**） |
 | `ui.tapId` | `id`,`index` | 按 accessibilityIdentifier 点击 |
+| `ui.axTap` | `label`,`index` | accessibilityActivate（SwiftUI 备选） |
 | `ui.swipe` | `x1`,`y1`,`x2`,`y2`,`duration` | 滑动 |
 | `ui.setText` | `text`,`index` | 给第 n 个输入框填字（自动聚焦） |
 | `ui.commit` | — | 当前输入框触发 return |
 | `ui.back` | — | 导航栈 pop / 点返回 |
 | `ui.dismissKeyboard` | — | 收键盘 |
 
-### 系统
+> **优先级**：`ui.tapText` > `ui.tap`。前者走 `UIControl sendActions` 一定能触发；
+> 后者依赖 IOHID 事件投递权限，很多环境（TrollStore 未越狱）会被静默丢弃。
+
+### 系统（9）
 
 | 工具 | 参数 | 说明 |
 |---|---|---|
 | `device.vibrate` | — | 震动 |
 | `pasteboard.get` / `set` | — / `text` | 剪贴板 |
 | `app.openURL` | `url` | 打开链接 |
-| `app.restart` | `confirm=true` | 0.4 秒后退出进程（重开即恢复落盘的 hook） |
+| `app.restart` | `confirm=true` | 0.4 秒后退出进程 |
 | `alert.show` | `title`,`msg` | 弹 alert |
+| **`guard.add`** | `key` | **拦住 UserDefaults 指定 key 的写入**，让它不被 app 改回去 |
+| `guard.list` | — | 当前保护列表 |
+| `guard.remove` | `key` | 取消保护 |
 
----
+**`guard.add` 的正确用法**（重点）：
+
+```
+guard.remove key=premium     # 先关保护
+写入 premium = 你想要的值
+guard.add    key=premium     # 再开保护
+```
+
+保护开启时**连你自己的写入也会被拦**，所以要按上面顺序做。保护列表落在
+`guards.json`，dylib 加载时（constructor，早于 app 任何代码）自动装好。
+
+### 诊断 / 部署（5）
+
+| 工具 | 参数 | 说明 |
+|---|---|---|
+| `hid.status` | — | IOHID 符号 / client 是否就绪（**就绪≠生效**） |
+| `hid.tap` | `x`,`y`,`scale`,`integrated` | 带参数的原始触摸注入，用来试坐标单位 |
+| `rc.info` | — | RevenueCat 运行时 CustomerInfo 长什么样 |
+| `rc.patch` | `id` | 伪造 entitlement（**Swift 类会崩，见 docs/03**） |
+| `deploy.test` | — | 验证沙盒里的新 dylib 能否 dlopen |
 
 ## 三、JS 环境（`_rd` 对象）
 

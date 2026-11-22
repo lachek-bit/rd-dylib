@@ -96,7 +96,7 @@ curl -s -X POST --data-binary @/tmp/js.txt http://10.4.37.156:8899/api/eval
 |---|---|
 | `docs/01-架构与原理.md` | 想知道内部怎么实现的、要改核心逻辑 |
 | `docs/02-API与工具手册.md` | 日常查接口、查工具参数 |
-| `docs/03-踩坑记录.md` | **动手前必读** —— 10 个坑，每个都能让你卡半天 |
+| `docs/03-踩坑记录.md` | **动手前必读** —— 15 个坑，每个都能让你卡半天 |
 | `docs/04-当前进度-Grow.md` | 接着调 Grow，看这里接着做 |
 | `docs/05-复刻与出包.md` | 换机器、重建仓库、改编译参数 |
 
@@ -137,3 +137,5 @@ E:\zm\dylib\
 1. **改完必须跑 `selftest.py`** —— 29 项全绿才算改对了。历史上每次「小改动」都崩过。
 2. **不要用 `objc_getClassList` / `objc_copyClassList`** —— 在 Swift app 里必崩，见坑 2。
 3. **调试期的 hook 不要落盘** —— 落盘 + 崩溃 = 崩溃循环，见坑 5。
+4. **遇到 SwiftUI + 全 Swift 的 app，别指望点击和 hook** —— 见坑 11、13、14，
+   三条路（UIControl / IOHID / accessibility）会同时堵死。
