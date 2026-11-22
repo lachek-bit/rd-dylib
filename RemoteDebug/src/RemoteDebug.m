@@ -421,6 +421,32 @@ static id RDInvoke(id target, NSString *selName, NSArray *args) {
                 [inv getReturnValue:&v];
                 return @(v);
             }
+            // 无符号版本，NSUInteger / count / length 都走这里
+            case 'C': {
+                unsigned char v = 0;
+                [inv getReturnValue:&v];
+                return @(v);
+            }
+            case 'S': {
+                unsigned short v = 0;
+                [inv getReturnValue:&v];
+                return @(v);
+            }
+            case 'I': {
+                unsigned int v = 0;
+                [inv getReturnValue:&v];
+                return @(v);
+            }
+            case 'L': {
+                unsigned long v = 0;
+                [inv getReturnValue:&v];
+                return @(v);
+            }
+            case 'Q': {
+                unsigned long long v = 0;
+                [inv getReturnValue:&v];
+                return @(v);
+            }
             case 'f': {
                 float v = 0;
                 [inv getReturnValue:&v];
@@ -769,8 +795,15 @@ static RDResp *RDHandle(NSString *method, NSString *path, NSDictionary *q, NSDat
         if (!cls.length || !sel.length) {
             return [RDResp json:@{@"ok": @NO, @"error": @"需要 cls 和 sel"}];
         }
+        // arg1=xxx 匹配第 1 个参数，arg2=xxx 匹配第 2 个（比如 setObject:forKey: 的 key）
+        NSString *am = q[@"argMatch"];
+        NSInteger ai = (NSInteger)[q[@"argIndex"] integerValue];
+        if (!am.length && q[@"arg1"]) { am = q[@"arg1"]; ai = 0; }
+        if (!am.length && q[@"arg2"]) { am = q[@"arg2"]; ai = 1; }
+
         NSString *err = nil;
-        BOOL ok = RDHookInstall(cls, sel, q[@"mode"], RDParseValue(q[@"value"]), &err);
+        BOOL ok = RDHookInstallFull(cls, sel, q[@"mode"], RDParseValue(q[@"value"]),
+                                    am, ai, &err);
         // 默认不落盘：调试期的 hook 重启即失效，避免把自己锁死在崩溃循环里。
         // 需要长期生效再加 persist=1
         BOOL persist = (q[@"persist"] != nil);
@@ -1284,6 +1317,10 @@ static void RDConstructor(void) {
         RDInstallCrashHandler();
         RDBootCheck();
         RDLogAppend(@"[RemoteDebug] dylib 已加载");
+
+        // 尽早把 hook 装回去。app 启动阶段就会读 UserDefaults，
+        // 等到 1.5 秒后再装就晚了 —— 那时界面早锁定了。
+        RDHookLoadPersisted();
 
         // 等 app 起来再开服务（UIKit / 网络栈就绪）
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),

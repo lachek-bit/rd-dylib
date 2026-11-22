@@ -32,6 +32,8 @@
 @property (nonatomic, assign) BOOL classMethod;
 @property (nonatomic, assign) BOOL floatReturn;
 @property (nonatomic, strong) id blockObj;
+@property (nonatomic, copy) NSString *argMatch;    // 参数匹配（nil=不匹配）
+@property (nonatomic, assign) NSInteger argIndex;   // 0 对应第 1 个参数
 @property (nonatomic, assign) NSUInteger hits;
 @property (nonatomic, assign) NSUInteger logged;
 @end
@@ -128,6 +130,21 @@ static void *RDGenericHook(RDHookRule *rule, id self,
         RDLogAppend(RDFormatCall(rule, self, argv, 6));
     }
 
+    // 参数匹配：不满足就原样转发，等于这个 hook 对其它调用完全透明
+    if (rule.argMatch.length) {
+        id a = nil;
+        switch (rule.argIndex) {
+            case 0: a = a1; break;
+            case 1: a = a2; break;
+            case 2: a = a3; break;
+            case 3: a = a4; break;
+            default: a = a5; break;
+        }
+        BOOL hit = [a isKindOfClass:[NSString class]] &&
+                   [(NSString *)a isEqualToString:rule.argMatch];
+        if (!hit) return RDCallOrigPtr(rule, self, a1, a2, a3, a4, a5);
+    }
+
     NSString *m = rule.mode;
     if ([m isEqualToString:@"skip"])  return NULL;
     if ([m isEqualToString:@"force"]) return RDForceValue(rule);
@@ -158,8 +175,9 @@ static double RDFloatHook(RDHookRule *rule, id self,
 
 #pragma mark - 安装 / 移除
 
-BOOL RDHookInstall(NSString *clsName, NSString *selName, NSString *mode,
-                   id value, NSString **errOut) {
+BOOL RDHookInstallFull(NSString *clsName, NSString *selName, NSString *mode,
+                       id value, NSString *argMatch, NSInteger argIndex,
+                       NSString **errOut) {
     if (!clsName.length || !selName.length) {
         if (errOut) *errOut = @"cls / sel 不能为空";
         return NO;
@@ -199,6 +217,8 @@ BOOL RDHookInstall(NSString *clsName, NSString *selName, NSString *mode,
         // 已 hook 过，只更新行为
         old.mode = mode.length ? mode : @"log";
         old.value = value;
+        old.argMatch = argMatch.length ? argMatch : nil;
+        old.argIndex = argIndex;
         if (errOut) *errOut = @"";
         return YES;
     }
@@ -219,6 +239,8 @@ BOOL RDHookInstall(NSString *clsName, NSString *selName, NSString *mode,
     r.sel = sel;
     r.mode = mode.length ? mode : @"log";
     r.value = value;
+    r.argMatch = argMatch.length ? argMatch : nil;
+    r.argIndex = argIndex;
     r.origIMP = method_getImplementation(m);
     r.retType = rt;
     r.classMethod = isClsMethod;
@@ -257,6 +279,11 @@ BOOL RDHookInstall(NSString *clsName, NSString *selName, NSString *mode,
     return YES;
 }
 
+BOOL RDHookInstall(NSString *clsName, NSString *selName, NSString *mode,
+                   id value, NSString **errOut) {
+    return RDHookInstallFull(clsName, selName, mode, value, nil, 0, errOut);
+}
+
 BOOL RDHookRemove(NSString *clsName, NSString *selName) {
     NSString *key = RDKey(clsName, selName);
     pthread_mutex_lock(&gRuleLock);
@@ -287,7 +314,8 @@ NSArray *RDHookList(void) {
             @"mode": r.mode ?: @"log",
             @"class_method": @(r.classMethod),
             @"hits": @(r.hits),
-            @"ret": [NSString stringWithFormat:@"%c", r.retType]
+            @"ret": [NSString stringWithFormat:@"%c", r.retType],
+            @"arg": r.argMatch ? [NSString stringWithFormat:@"%ld:%@", (long)r.argIndex, r.argMatch] : @""
         }];
     }
     pthread_mutex_unlock(&gRuleLock);
@@ -345,6 +373,10 @@ BOOL RDHookPersist(void) {
             @"sel": r.selName ?: @"",
             @"mode": r.mode ?: @"log"
         } mutableCopy];
+        if (r.argMatch.length) {
+            d[@"argMatch"] = r.argMatch;
+            d[@"argIndex"] = @(r.argIndex);
+        }
         if (r.value) {
             // 只持久化能序列化的值
             if ([r.value isKindOfClass:[NSNumber class]] ||
@@ -413,7 +445,9 @@ void RDHookLoadPersisted(void) {
         NSString *cls = item[@"cls"], *sel = item[@"sel"], *mode = item[@"mode"];
         id value = item[@"value"];
         NSString *err = nil;
-        if (RDHookInstall(cls, sel, mode, value, &err)) ok++;
+        NSString *am = item[@"argMatch"];
+        NSInteger ai = [item[@"argIndex"] integerValue];
+        if (RDHookInstallFull(cls, sel, mode, value, am, ai, &err)) ok++;
         else RDLogAppend([NSString stringWithFormat:@"[HOOK!] 恢复失败 %@ %@: %@", cls, sel, err]);
     }
     if (ok) RDLogAppend([NSString stringWithFormat:@"[HOOK] 已从 hooks.json 恢复 %lu 条规则", (unsigned long)ok]);

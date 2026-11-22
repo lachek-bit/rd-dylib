@@ -41,6 +41,9 @@ int RDCurrentPortPub(void);
 //   after —— 调原实现，把返回值改成 value
 BOOL RDHookInstall(NSString *clsName, NSString *selName, NSString *mode,
                    id value, NSString **errOut);
+BOOL RDHookInstallFull(NSString *clsName, NSString *selName, NSString *mode,
+                       id value, NSString *argMatch, NSInteger argIndex,
+                       NSString **errOut);
 BOOL RDHookRemove(NSString *clsName, NSString *selName);
 NSArray *RDHookList(void);
 void RDHookLoadPersisted(void);
