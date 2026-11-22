@@ -103,6 +103,14 @@ void RDToolLoadPersisted(void);
 
 BOOL RDPatchRevenueCat(NSString *entitlementID, NSString **errOut);
 BOOL RDIsRCPatched(void);
+
+#pragma mark - UserDefaults 写入保护
+
+void RDGuardAdd(NSString *key);
+void RDGuardRemove(NSString *key);
+NSArray *RDGuardList(void);
+void RDLoadGuards(void);
+BOOL RDGuardsActive(void);
 BOOL RDToolPersist(void);
 BOOL RDToolIsBuiltin(NSString *name);
 

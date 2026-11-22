@@ -526,6 +526,28 @@ static void RDToolRegisterUIGroup(void) {
             return @{@"ok": @(ok)};
         });
 
+    RDRegisterTool(@"guard.add", @"禁止覆盖某个 key",
+        @"拦截 UserDefaults 写入，让指定 key 的值不被 app 改回去",
+        @[P(@"key", @"string", YES, @"例如 premium")], @"系统", ^id(NSDictionary *a) {
+            NSString *k = RDArgStr(a, @"key", nil);
+            if (!k.length) return @{@"ok": @NO, @"error": @"缺少 key"};
+            RDGuardAdd(k);
+            return @{@"ok": @YES, @"key": k, @"active": @(RDGuardsActive()),
+                     @"list": RDGuardList()};
+        });
+
+    RDRegisterTool(@"guard.list", @"写入保护列表",
+        @"", @[], @"系统", ^id(NSDictionary *a) {
+            return @{@"ok": @YES, @"active": @(RDGuardsActive()),
+                     @"keys": RDGuardList()};
+        });
+
+    RDRegisterTool(@"guard.remove", @"取消写入保护",
+        @"", @[P(@"key", @"string", YES, @"")], @"系统", ^id(NSDictionary *a) {
+            RDGuardRemove(RDArgStr(a, @"key", nil));
+            return @{@"ok": @YES, @"keys": RDGuardList()};
+        });
+
     RDRegisterTool(@"rc.patch", @"伪造 RevenueCat 权益",
         @"账号没订阅过时 entitlements 是空的，这个工具凭空塞一个 entitlement 进去",
         @[P(@"id", @"string", NO, @"entitlement 标识，默认 premium")], @"系统", ^id(NSDictionary *a) {

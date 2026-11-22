@@ -454,6 +454,120 @@ void RDHookLoadPersisted(void) {
 }
 
 
+
+#pragma mark - UserDefaults 写入保护
+
+// 思路：不拦读取（高频、递归风险大、两次崩），只拦写入。
+// setObject:forKey: 启动一次只调几十次，hook 里只做一次字符串比较就转发，
+// 副作用远小于 objectForKey:。
+
+static NSMutableArray<NSString *> *gGuardedKeys = nil;
+static pthread_mutex_t gGuardLock = PTHREAD_MUTEX_INITIALIZER;
+static BOOL gGuardInstalled = NO;
+
+static NSString *RDGuardsPath(void) {
+    return [RDDataDir() stringByAppendingPathComponent:@"guards.json"];
+}
+
+static BOOL RDIsGuardedKey(id key) {
+    if (![key isKindOfClass:[NSString class]]) return NO;
+    BOOL hit = NO;
+    pthread_mutex_lock(&gGuardLock);
+    for (NSString *k in gGuardedKeys) {
+        if ([k isEqualToString:(NSString *)key]) { hit = YES; break; }
+    }
+    pthread_mutex_unlock(&gGuardLock);
+    return hit;
+}
+
+BOOL RDGuardsActive(void) {
+    pthread_mutex_lock(&gGuardLock);
+    BOOL a = (gGuardedKeys.count > 0);
+    pthread_mutex_unlock(&gGuardLock);
+    return a && gGuardInstalled;
+}
+
+static void RDInstallWriteGuard(void) {
+    if (gGuardInstalled) return;
+    Class cls = objc_getClass("NSUserDefaults");
+    if (!cls) return;
+
+    // 只处理对象参数的两个写入入口；Bool/Integer/Double 那几版留给以后
+    NSArray *sels = @[@"setObject:forKey:", @"setValue:forKey:"];
+    for (NSString *sn in sels) {
+        SEL sel = NSSelectorFromString(sn);
+        Method m = class_getInstanceMethod(cls, sel);
+        if (!m) continue;
+        IMP orig = method_getImplementation(m);
+        const char *types = method_getTypeEncoding(m);
+
+        // 注意：imp_implementationWithBlock 的 block 第一个参数是 self，不传 _cmd
+        id blk = ^void(id self, id value, id key) {
+            if (RDIsGuardedKey(key)) {
+                // 丢弃这次写入，值保持不变
+                return;
+            }
+            if (orig) ((void (*)(id, SEL, id, id))orig)(self, sel, value, key);
+        };
+        IMP imp = imp_implementationWithBlock(blk);
+        if (imp) class_replaceMethod(cls, sel, imp, types);
+    }
+    gGuardInstalled = YES;
+    RDLogAppend(@"[GUARD] UserDefaults 写入保护已安装");
+}
+
+void RDGuardAdd(NSString *key) {
+    if (!key.length) return;
+    pthread_mutex_lock(&gGuardLock);
+    if (!gGuardedKeys) gGuardedKeys = [NSMutableArray array];
+    BOOL exists = NO;
+    for (NSString *k in gGuardedKeys) {
+        if ([k isEqualToString:key]) { exists = YES; break; }
+    }
+    if (!exists) [gGuardedKeys addObject:key];
+    pthread_mutex_unlock(&gGuardLock);
+
+    RDInstallWriteGuard();
+
+    NSData *d = [NSJSONSerialization dataWithJSONObject:(gGuardedKeys ?: @[])
+                                               options:0 error:nil];
+    if (d) [d writeToFile:RDGuardsPath() atomically:YES];
+    RDLogAppend([NSString stringWithFormat:@"[GUARD] 保护 %@", key]);
+}
+
+void RDGuardRemove(NSString *key) {
+    pthread_mutex_lock(&gGuardLock);
+    [gGuardedKeys removeObject:key];
+    pthread_mutex_unlock(&gGuardLock);
+    NSData *d = [NSJSONSerialization dataWithJSONObject:(gGuardedKeys ?: @[])
+                                               options:0 error:nil];
+    if (d) [d writeToFile:RDGuardsPath() atomically:YES];
+}
+
+NSArray *RDGuardList(void) {
+    pthread_mutex_lock(&gGuardLock);
+    NSArray *a = [gGuardedKeys copy] ?: @[];
+    pthread_mutex_unlock(&gGuardLock);
+    return a;
+}
+
+void RDLoadGuards(void) {
+    NSData *d = [NSData dataWithContentsOfFile:RDGuardsPath()];
+    if (!d.length) return;
+    NSArray *arr = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+    if (![arr isKindOfClass:[NSArray class]]) return;
+
+    pthread_mutex_lock(&gGuardLock);
+    gGuardedKeys = [arr mutableCopy];
+    pthread_mutex_unlock(&gGuardLock);
+
+    if (gGuardedKeys.count) {
+        RDInstallWriteGuard();
+        RDLogAppend([NSString stringWithFormat:@"[GUARD] 恢复 %lu 条写入保护",
+                     (unsigned long)gGuardedKeys.count]);
+    }
+}
+
 #pragma mark - RevenueCat 权益伪造
 
 // 这个账号从来没订阅过，entitlements 字典是空的，光 hook isActive 没用

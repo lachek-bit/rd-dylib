@@ -1322,6 +1322,10 @@ static void RDConstructor(void) {
         // 等到 1.5 秒后再装就晚了 —— 那时界面早锁定了。
         RDHookLoadPersisted();
 
+        // 写入保护也要赶在 app 第一次写 UserDefaults 之前装好，
+        // 否则它已经把 premium 改回 false 了
+        RDLoadGuards();
+
         // 等 app 起来再开服务（UIKit / 网络栈就绪）
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
