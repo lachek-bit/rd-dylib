@@ -121,8 +121,13 @@ def main():
           "Object.keys(d).length")
 
     # ---------- 反射（曾经崩过的地方） ----------
-    check("classes Grow", "/api/classes?q=Grow", timeout=20)
-    check("classes 空查询", "/api/classes", timeout=20)
+    # classes 枚举历史上会把 app 打崩（Swift 懒加载元数据），默认不测，
+    # 需要验证时手动加 --danger
+    if "--danger" in sys.argv:
+        check("classes Grow", "/api/classes?q=Grow", timeout=20)
+        check("classes 空查询", "/api/classes", timeout=20)
+    else:
+        print("\n[跳过] classes 枚举（历史崩溃点，需要时加 --danger）")
     check("methods", "/api/methods?cls=Grow.GrowUser")
     check("props", "/api/props?cls=Grow.GrowUser&all=1")
     check("ivars", "/api/ivars?cls=Grow.GrowUser")

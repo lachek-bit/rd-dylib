@@ -294,50 +294,60 @@ static JSContext *gJS = nil;
 static NSString *gJSLastError = nil;
 
 static NSArray<NSString *> *RDAllClassNames(void) {
-    // 不要用 objc_getClassList 的「两次调用」模式。
-    // crash.log 实测：SIGSEGV addr=0x0 死在 objc_getClassList+80，
-    // 第二次调用返回的是当前真实总数（运行时还会动态生成类），和 buffer 容量对不上，
-    // 而且在 Swift app 里它内部偶发空指针。
-    // objc_copyClassList 一次返回完整快照，内存自己 free，稳得多。
+    // 血泪：在 Swift app 里枚举类不能碰 Class 对象。
+    // objc_getClassList / objc_copyClassList 都会走到 class_getName，
+    // 而某些 Swift 类的元数据是懒加载的，class_getName 会触发
+    // swift_getSingletonMetadata 实例化 —— 递归或半初始化状态直接 SIGSEGV。
+    // （crash.log 里同时看到 objc_getClassList+80 和 swift_getSingletonMetadata 两帧）
+    //
+    // 改用 objc_copyImageNames + objc_copyClassNamesForImage：
+    // 它只返回名字字符串，不构造 Class，完全不碰元数据。
     static pthread_mutex_t cacheLock = PTHREAD_MUTEX_INITIALIZER;
     static NSArray *cache = nil;
     static NSTimeInterval cacheAt = 0;
 
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
     pthread_mutex_lock(&cacheLock);
-    if (cache && now - cacheAt < 10.0) {
+    if (cache && now - cacheAt < 15.0) {
         NSArray *hit = cache;
         pthread_mutex_unlock(&cacheLock);
         return hit;
     }
     pthread_mutex_unlock(&cacheLock);
 
-    unsigned int count = 0;
-    Class *classes = objc_copyClassList(&count);
-    if (!classes || count == 0) {
-        if (classes) free(classes);
-        return @[];
-    }
+    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:4096];
 
-    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:count];
-    for (unsigned int i = 0; i < count; i++) {
-        Class c = classes[i];
-        if (!c) continue;
-        const char *s = class_getName(c);
-        if (!s) continue;
-        @try {
-            NSString *name = [NSString stringWithUTF8String:s];
-            if (!name) {
-                name = [[NSString alloc] initWithBytes:s
-                                                length:strlen(s)
-                                              encoding:NSISOLatin1StringEncoding];
+    unsigned int imgCount = 0;
+    const char **images = objc_copyImageNames(&imgCount);
+    if (images) {
+        for (unsigned int i = 0; i < imgCount; i++) {
+            if (!images[i]) continue;
+            unsigned int clsCount = 0;
+            const char **names = NULL;
+            @try {
+                names = objc_copyClassNamesForImage(images[i], &clsCount);
+            } @catch (NSException *e) {
+                names = NULL;
             }
-            if (name.length) [arr addObject:name];
-        } @catch (NSException *e) {
-            (void)e;
+            if (!names) continue;
+            for (unsigned int j = 0; j < clsCount; j++) {
+                if (!names[j]) continue;
+                @try {
+                    NSString *s = [NSString stringWithUTF8String:names[j]];
+                    if (!s.length) {
+                        s = [[NSString alloc] initWithBytes:names[j]
+                                                     length:strlen(names[j])
+                                                   encoding:NSISOLatin1StringEncoding];
+                    }
+                    if (s.length) [arr addObject:s];
+                } @catch (NSException *e) {
+                    (void)e;
+                }
+            }
+            free(names);
         }
+        free(images);
     }
-    free(classes);
 
     pthread_mutex_lock(&cacheLock);
     cache = arr;
