@@ -1232,6 +1232,14 @@ static void RDStartServer(void) {
         RDInstallAdHook();
     });
 
+    // 开屏广告：从 0.3s 起反复尝试，直到 QMSplashAd 类加载就 hook
+    for (double t = 0.3; t <= 2.0; t += 0.3) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(t * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            RDInstallSplashGuard();
+        });
+    }
+
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         for (;;) {
             struct sockaddr_in cli;

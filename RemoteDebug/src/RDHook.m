@@ -658,7 +658,9 @@ void RDInstallAdHook(void) {
     if (vm) {
         IMP vcOrig = method_getImplementation(vm);
         const char *vcTypes = method_getTypeEncoding(vm);
-        id vcBlk = ^void(id self, id vc, id animated, id completion) {
+        // 注意：animated 是 BOOL，completion 是 block，必须用真实类型声明，
+        // 不能全声明成 id —— 否则 ARC 会把 BOOL 当对象 retain，直接搞坏界面交互
+        id vcBlk = ^void(id self, id vc, BOOL animated, void (^completion)(void)) {
             if (gAdBlockOn && vc) {
                 const char *cn = object_getClassName(vc);
                 if (RDIsAdClassName(cn)) {
@@ -670,7 +672,7 @@ void RDInstallAdHook(void) {
                     return;   // 拦掉这个广告 VC 的弹出
                 }
             }
-            if (vcOrig) ((void (*)(id, SEL, id, id, id))vcOrig)(self, vcSel, vc, animated, completion);
+            if (vcOrig) ((void (*)(id, SEL, id, BOOL, void (^)(void)))vcOrig)(self, vcSel, vc, animated, completion);
         };
         IMP vcImp = imp_implementationWithBlock(vcBlk);
         if (vcImp) {
