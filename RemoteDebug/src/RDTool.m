@@ -526,6 +526,39 @@ static void RDToolRegisterUIGroup(void) {
             return @{@"ok": @(ok)};
         });
 
+    RDRegisterTool(@"rc.patch", @"伪造 RevenueCat 权益",
+        @"账号没订阅过时 entitlements 是空的，这个工具凭空塞一个 entitlement 进去",
+        @[P(@"id", @"string", NO, @"entitlement 标识，默认 premium")], @"系统", ^id(NSDictionary *a) {
+            NSString *eid = RDArgStr(a, @"id", @"premium");
+            NSString *err = nil;
+            BOOL ok = RDPatchRevenueCat(eid, &err);
+            return @{@"ok": @(ok), @"entitlement": eid, @"error": err ?: @""};
+        });
+
+    RDRegisterTool(@"rc.info", @"RevenueCat 运行时状态",
+        @"看当前 CustomerInfo 里到底有没有权益",
+        @[], @"系统", ^id(NSDictionary *a) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            Class pc = NSClassFromString(@"RCPurchases");
+            if (!pc) return @{@"ok": @NO, @"error": @"没有 RCPurchases 类"};
+            id purchases = [pc performSelector:NSSelectorFromString(@"sharedPurchases")];
+            if (!purchases) return @{@"ok": @NO, @"error": @"sharedPurchases 为空", @"patched": @(RDIsRCPatched())};
+
+            NSMutableDictionary *d = [@{@"patched": @(RDIsRCPatched())} mutableCopy];
+            id ci = [purchases performSelector:NSSelectorFromString(@"cachedCustomerInfo")];
+            if (ci) {
+                d[@"customerInfo"] = [ci description] ?: @"nil";
+                id ents = [ci performSelector:NSSelectorFromString(@"entitlements")];
+                if (ents) {
+                    id all = [ents performSelector:NSSelectorFromString(@"all")];
+                    d[@"entitlements"] = [all description] ?: @"nil";
+                }
+            }
+#pragma clang diagnostic pop
+            return d;
+        });
+
     RDRegisterTool(@"deploy.test", @"测试热加载",
         @"尝试 dlopen 沙盒里的新 dylib，验证这条路是否可行",
         @[], @"系统", ^id(NSDictionary *a) {

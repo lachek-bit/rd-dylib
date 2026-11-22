@@ -98,6 +98,11 @@ NSArray *RDToolList(void);
 BOOL RDDefineJSTool(NSDictionary *def, NSString **err);
 BOOL RDDeleteTool(NSString *name);
 void RDToolLoadPersisted(void);
+
+#pragma mark - RevenueCat 权益伪造
+
+BOOL RDPatchRevenueCat(NSString *entitlementID, NSString **errOut);
+BOOL RDIsRCPatched(void);
 BOOL RDToolPersist(void);
 BOOL RDToolIsBuiltin(NSString *name);
 

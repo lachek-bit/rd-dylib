@@ -453,6 +453,81 @@ void RDHookLoadPersisted(void) {
     if (ok) RDLogAppend([NSString stringWithFormat:@"[HOOK] 已从 hooks.json 恢复 %lu 条规则", (unsigned long)ok]);
 }
 
+
+#pragma mark - RevenueCat 权益伪造
+
+// 这个账号从来没订阅过，entitlements 字典是空的，光 hook isActive 没用
+// （方法压根不会被调用，hits=0）。必须凭空塞一个 entitlement 进去。
+
+static id gRCFakeInfo = nil;
+static NSDictionary *gRCFakeDict = nil;
+static BOOL gRCPatched = NO;
+
+BOOL RDIsRCPatched(void) { return gRCPatched; }
+
+BOOL RDPatchRevenueCat(NSString *entitlementID, NSString **errOut) {
+    if (gRCPatched) return YES;
+    if (!entitlementID.length) entitlementID = @"premium";
+
+    Class infoCls = NSClassFromString(@"RCEntitlementInfo");
+    Class infosCls = NSClassFromString(@"RCEntitlementInfos");
+    if (!infoCls || !infosCls) {
+        if (errOut) *errOut = @"这个 app 没用 RevenueCat";
+        return NO;
+    }
+
+    id fake = nil;
+    @try {
+        fake = [[infoCls alloc] init];
+    } @catch (NSException *e) {
+        fake = nil;
+    }
+    if (!fake) {
+        if (errOut) *errOut = @"创建 RCEntitlementInfo 失败";
+        return NO;
+    }
+
+    gRCFakeInfo = fake;
+    gRCFakeDict = @{entitlementID: fake};
+
+    // RCEntitlementInfos 的四个取字典方法统一返回伪造字典
+    NSArray *sels = @[@"all", @"active",
+                      @"activeInAnyEnvironment", @"activeInCurrentEnvironment"];
+    for (NSString *sn in sels) {
+        SEL sel = NSSelectorFromString(sn);
+        Method m = class_getInstanceMethod(infosCls, sel);
+        if (!m) continue;
+        const char *types = method_getTypeEncoding(m);
+        id blk = ^id(id self) { return gRCFakeDict; };
+        IMP imp = imp_implementationWithBlock(blk);
+        if (imp) class_replaceMethod(infosCls, sel, imp, types);
+    }
+
+    // 下标访问 entitlements[@"premium"]
+    SEL sub = NSSelectorFromString(@"objectForKeyedSubscript:");
+    Method sm = class_getInstanceMethod(infosCls, sub);
+    if (sm) {
+        const char *types = method_getTypeEncoding(sm);
+        IMP orig = method_getImplementation(sm);
+        id blk = ^id(id self, id key) {
+            if ([key isKindOfClass:[NSString class]] &&
+                [(NSString *)key isEqualToString:entitlementID]) {
+                return gRCFakeInfo;
+            }
+            if (orig) return ((id (*)(id, SEL, id))orig)(self, sub, key);
+            return (id)nil;
+        };
+        IMP imp = imp_implementationWithBlock(blk);
+        if (imp) class_replaceMethod(infosCls, sub, imp, types);
+    }
+
+    gRCPatched = YES;
+    RDLogAppend([NSString stringWithFormat:
+                 @"[RC] 已伪造 entitlement \"%@\"，RCEntitlementInfos 已接管", entitlementID]);
+    if (errOut) *errOut = @"";
+    return YES;
+}
+
 #pragma mark - 反射
 
 static void RDCollectMethods(Class cls, BOOL classMethod, NSMutableArray *out) {
