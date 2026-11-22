@@ -689,58 +689,127 @@ void RDInstallAdHook(void) {
 // constructor 阶段还没加载，所以用延迟重试，直到类出现为止。
 static BOOL gSplashGuardDone = NO;
 
+// 安全地 hook 一个方法为「静默丢弃」：
+// 只处理 void 返回 + 全部参数都是对象的方法（BOOL/基本类型参数一律跳过，
+// 否则 ARC 会把 BOOL 当对象 retain 直接搞坏界面 —— 之前 presentViewController 的教训）
+static void RDHookMethodSkip(Class cls, NSString *selName, int *count) {
+    SEL sel = NSSelectorFromString(selName);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return;
+    const char *types = method_getTypeEncoding(m);
+    NSMethodSignature *sig = [NSMethodSignature signatureWithObjCTypes:types];
+    if (!sig) return;
+    if (strcmp(sig.methodReturnType, "v") != 0) return;      // 只 skip void 返回
+    NSUInteger argc = sig.numberOfArguments - 2;              // 去掉 self / _cmd
+    if (argc > 3) return;
+    for (NSUInteger i = 2; i < sig.numberOfArguments; i++) {
+        const char *t = [sig getArgumentTypeAtIndex:i];
+        if (t[0] != '@') return;                              // 有非对象参数，跳过
+    }
+
+    IMP imp = NULL;
+    switch (argc) {
+        case 0: imp = imp_implementationWithBlock(^void(id self){}); break;
+        case 1: imp = imp_implementationWithBlock(^void(id self, id a1){}); break;
+        case 2: imp = imp_implementationWithBlock(^void(id self, id a1, id a2){}); break;
+        case 3: imp = imp_implementationWithBlock(^void(id self, id a1, id a2, id a3){}); break;
+        default: return;
+    }
+    if (imp) { class_replaceMethod(cls, sel, imp, types); (*count)++; }
+}
+
+// 默认拦截方法（可被 adblock.json 的 hooks 字段覆盖/追加）
+static NSArray *RDDefaultAdHooks(void) {
+    return @[
+        @{@"cls": @"PTGFancySplashProxy",
+          @"sels": @[@"showAdFromRootViewController:bottomView:", @"loadSplashAd"]},
+        @{@"cls": @"QMSplashAd",
+          @"sels": @[@"showSplashWindow:", @"showSplashWindow:withBottomView:",
+                     @"showSplashViewController:", @"showSplashViewController:withBottomView:",
+                     @"showSplashAdWithController:bottomView:inWindow:"]},
+    ];
+}
+
+static NSMutableArray<NSDictionary *> *gAdHooks = nil;   // 合并后的 hook 规则
+static pthread_mutex_t gAdHooksLock = PTHREAD_MUTEX_INITIALIZER;
+
+static NSArray *RDAdHooksFromConfig(void) {
+    NSData *d = [NSData dataWithContentsOfFile:RDAdblockConfigPath()];
+    if (!d.length) return nil;
+    id obj = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+    if ([obj isKindOfClass:[NSDictionary class]] && [obj[@"hooks"] isKindOfClass:[NSArray class]]) {
+        return obj[@"hooks"];
+    }
+    return nil;
+}
+
+NSArray *RDMergedAdHooks(void) {
+    pthread_mutex_lock(&gAdHooksLock);
+    NSArray *a = [gAdHooks copy] ?: @[];
+    pthread_mutex_unlock(&gAdHooksLock);
+    return a;
+}
+
+// 工具：运行时加一条 hook 规则并落盘
+void RDAdHookAdd(NSString *cls, NSArray *sels) {
+    if (!cls.length || !sels.count) return;
+    pthread_mutex_lock(&gAdHooksLock);
+    if (!gAdHooks) gAdHooks = [NSMutableArray array];
+    // 去重
+    BOOL found = NO;
+    for (NSDictionary *h in gAdHooks) {
+        if ([h[@"cls"] isEqualToString:cls]) { found = YES; break; }
+    }
+    if (!found) [gAdHooks addObject:@{@"cls": cls, @"sels": sels}];
+    NSArray *snap = [gAdHooks copy];
+    pthread_mutex_unlock(&gAdHooksLock);
+
+    // 写回 adblock.json
+    NSMutableDictionary *cfg = [NSMutableDictionary dictionary];
+    NSData *old = [NSData dataWithContentsOfFile:RDAdblockConfigPath()];
+    if (old.length) {
+        id o = [NSJSONSerialization JSONObjectWithData:old options:0 error:nil];
+        if ([o isKindOfClass:[NSDictionary class]]) [cfg addEntriesFromDictionary:o];
+    }
+    cfg[@"on"] = @(YES);
+    cfg[@"hooks"] = snap;
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:cfg options:0 error:nil];
+    if (jd) [jd writeToFile:RDAdblockConfigPath() atomically:YES];
+    RDLogAppend([NSString stringWithFormat:@"[AD] hook 规则 +%@", cls]);
+}
+
 void RDInstallSplashGuard(void) {
     if (gSplashGuardDone) return;
 
-    // 1) 小蚕实际用的开屏广告：PTGFancySplashProxy（日志里 dealloc 暴露的）
-    Class ptg = objc_getClass("PTGFancySplashProxy");
-    if (ptg) {
-        int n = 0;
-        // showAdFromRootViewController:bottomView:  —— 展示开屏
-        SEL s1 = @selector(showAdFromRootViewController:bottomView:);
-        Method m1 = class_getInstanceMethod(ptg, s1);
-        if (m1) {
-            const char *types = method_getTypeEncoding(m1);
-            id blk = ^void(id self, id vc, id bottom) { /* 静默丢弃 */ };
-            IMP imp = imp_implementationWithBlock(blk);
-            if (imp) { class_replaceMethod(ptg, s1, imp, types); n++; }
+    // 合并：默认 + 配置
+    if (!gAdHooks) {
+        gAdHooks = [RDDefaultAdHooks() mutableCopy];
+        NSArray *cfg = RDAdHooksFromConfig();
+        if (cfg) {
+            for (NSDictionary *h in cfg) {
+                if ([h[@"cls"] isKindOfClass:[NSString class]] &&
+                    [h[@"sels"] isKindOfClass:[NSArray class]]) {
+                    [gAdHooks addObject:h];
+                }
+            }
         }
-        // loadSplashAd —— 连加载都省了
-        SEL s2 = @selector(loadSplashAd);
-        Method m2 = class_getInstanceMethod(ptg, s2);
-        if (m2) {
-            const char *types = method_getTypeEncoding(m2);
-            id blk = ^void(id self) { /* 静默丢弃 */ };
-            IMP imp = imp_implementationWithBlock(blk);
-            if (imp) { class_replaceMethod(ptg, s2, imp, types); n++; }
-        }
-        if (n > 0) {
-            gSplashGuardDone = YES;
-            RDLogAppend([NSString stringWithFormat:@"[AD] 开屏广告拦截已装 PTGFancySplashProxy（%d 方法）", n]);
-        }
-        return;
     }
 
-    // 2) 备用：腾讯 QMSplashAd（别的 app 可能用）
-    Class cls = objc_getClass("QMSplashAd");
-    if (!cls) return;   // 还没加载，等下次重试
-    NSArray *sels = @[@"showSplashWindow:",
-                      @"showSplashWindow:withBottomView:",
-                      @"showSplashViewController:",
-                      @"showSplashViewController:withBottomView:",
-                      @"showSplashAdWithController:bottomView:inWindow:"];
     int n = 0;
-    for (NSString *sn in sels) {
-        SEL sel = NSSelectorFromString(sn);
-        Method m = class_getInstanceMethod(cls, sel);
-        if (!m) continue;
-        const char *types = method_getTypeEncoding(m);
-        id blk = ^void(id self, id a1, id a2, id a3) { /* 静默丢弃 */ };
-        IMP imp = imp_implementationWithBlock(blk);
-        if (imp) { class_replaceMethod(cls, sel, imp, types); n++; }
+    for (NSDictionary *h in RDMergedAdHooks()) {
+        Class cls = objc_getClass([h[@"cls"] UTF8String]);
+        if (!cls) continue;   // 类还没加载，等下次重试
+        for (NSString *sn in h[@"sels"]) {
+            if ([sn isKindOfClass:[NSString class]]) {
+                RDHookMethodSkip(cls, sn, &n);
+            }
+        }
     }
-    gSplashGuardDone = YES;
-    RDLogAppend([NSString stringWithFormat:@"[AD] 开屏广告拦截已装 QMSplashAd（%d 方法）", n]);
+
+    if (n > 0) {
+        gSplashGuardDone = YES;
+        RDLogAppend([NSString stringWithFormat:@"[AD] 方法级广告拦截已装（%d 个方法）", n]);
+    }
 }
 
 #pragma mark - UserDefaults 写入保护

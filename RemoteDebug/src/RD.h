@@ -117,6 +117,8 @@ BOOL RDGuardsActive(void);
 void RDAdBlockSet(BOOL on);
 void RDInstallAdHook(void);
 void RDInstallSplashGuard(void);
+void RDAdHookAdd(NSString *cls, NSArray *sels);
+NSArray *RDMergedAdHooks(void);
 void RDAdExtraAdd(NSString *prefix);
 void RDAdExtraRemove(NSString *prefix);
 NSArray *RDAdExtraList(void);

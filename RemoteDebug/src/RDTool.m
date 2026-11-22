@@ -526,6 +526,23 @@ static void RDToolRegisterUIGroup(void) {
             return @{@"ok": @(ok)};
         });
 
+    RDRegisterTool(@"ad.hook.add", @"加方法级拦截（热更）",
+        @"遇到新广告类时，加类名+方法名，重启生效，不用换 dylib",
+        @[P(@"cls", @"string", YES, @"类名，如 XXXSplashAd"),
+          P(@"sel", @"string", YES, @"方法名，如 showAd:（可逗号分隔多个）")], @"系统", ^id(NSDictionary *a) {
+            NSString *c = RDArgStr(a, @"cls", nil);
+            NSString *sl = RDArgStr(a, @"sel", nil);
+            if (!c.length || !sl.length) return @{@"ok": @NO, @"error": @"缺 cls 或 sel"};
+            NSArray *sels = [sl componentsSeparatedByString:@","];
+            RDAdHookAdd(c, sels);
+            return @{@"ok": @YES, @"hooks": RDMergedAdHooks()};
+        });
+
+    RDRegisterTool(@"ad.hook.list", @"方法级拦截规则",
+        @"", @[], @"系统", ^id(NSDictionary *a) {
+            return @{@"ok": @YES, @"hooks": RDMergedAdHooks()};
+        });
+
     RDRegisterTool(@"ad.extra.add", @"添加广告前缀（热更）",
         @"遇到新广告 SDK 时加类名前缀，重启生效，不用换 dylib",
         @[P(@"prefix", @"string", YES, @"类名前缀，如 XiaoCanAd")], @"系统", ^id(NSDictionary *a) {
