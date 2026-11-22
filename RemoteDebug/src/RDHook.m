@@ -541,6 +541,9 @@ static void RDAdLoadExtraPrefix(void) {
 }
 
 // 把 on + extra 一起写回配置
+static NSMutableArray<NSDictionary *> *gAdHooks = nil;   // 合并后的 hook 规则
+static pthread_mutex_t gAdHooksLock = PTHREAD_MUTEX_INITIALIZER;
+
 static void RDAdSaveConfig(void) {
     pthread_mutex_lock(&gAdExtraLock);
     NSMutableDictionary *cfg = [NSMutableDictionary dictionary];
@@ -737,9 +740,6 @@ static NSArray *RDDefaultAdHooks(void) {
           @"sels": @[@"showInterstitialViewInRootViewController:"]},
     ];
 }
-
-static NSMutableArray<NSDictionary *> *gAdHooks = nil;   // 合并后的 hook 规则
-static pthread_mutex_t gAdHooksLock = PTHREAD_MUTEX_INITIALIZER;
 
 static NSArray *RDAdHooksFromConfig(void) {
     NSData *d = [NSData dataWithContentsOfFile:RDAdblockConfigPath()];
