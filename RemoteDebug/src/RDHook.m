@@ -546,6 +546,7 @@ static void RDAdSaveConfig(void) {
     NSMutableDictionary *cfg = [NSMutableDictionary dictionary];
     cfg[@"on"] = @(gAdBlockOn);
     cfg[@"extra"] = [gAdExtraPrefix copy] ?: @[];
+    if (gAdHooks.count) cfg[@"hooks"] = [gAdHooks copy];
     NSDictionary *snap = [cfg copy];
     pthread_mutex_unlock(&gAdExtraLock);
     NSData *d = [NSJSONSerialization dataWithJSONObject:snap options:0 error:nil];
@@ -720,13 +721,20 @@ static void RDHookMethodSkip(Class cls, NSString *selName, int *count) {
 
 // 默认拦截方法（可被 adblock.json 的 hooks 字段覆盖/追加）
 static NSArray *RDDefaultAdHooks(void) {
+    // 只拦「展示（show）」，绝不拦「加载（load）」
+    // —— 拦了 load 会让 app 启动时等广告回调等到超时，开屏卡好几秒
     return @[
         @{@"cls": @"PTGFancySplashProxy",
-          @"sels": @[@"showAdFromRootViewController:bottomView:", @"loadSplashAd"]},
+          @"sels": @[@"showAdFromRootViewController:bottomView:"]},
+        @{@"cls": @"FancySplashAd",
+          @"sels": @[@"showAdFromRootViewController:ad:",
+                     @"showAdFromRootViewController:bottomView:"]},
         @{@"cls": @"QMSplashAd",
           @"sels": @[@"showSplashWindow:", @"showSplashWindow:withBottomView:",
                      @"showSplashViewController:", @"showSplashViewController:withBottomView:",
                      @"showSplashAdWithController:bottomView:inWindow:"]},
+        @{@"cls": @"QMInterstitialAd",
+          @"sels": @[@"showInterstitialViewInRootViewController:"]},
     ];
 }
 
