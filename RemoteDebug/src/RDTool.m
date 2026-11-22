@@ -253,6 +253,12 @@ void RDToolLoadPersisted(void) {
 
 static void RDToolRegisterUIGroup(void) {
     // ---------- 看 ----------
+    RDRegisterTool(@"ui.windows", @"所有窗口完整视图树",
+        @"dump 全部 window 的每个 view（类名/尺寸/背景色），诊断广告遮罩用",
+        @[], @"看", ^id(NSDictionary *a) {
+            return @{@"ok": @YES, @"dump": RDDumpAllWindows()};
+        });
+
     RDRegisterTool(@"ui.tree", @"界面元素表",
         @"列出当前界面上所有可点击/可识别的元素：序号、类型、文字、中心坐标",
         @[], @"看", ^id(NSDictionary *a) {
