@@ -137,12 +137,18 @@ def main():
     check("fs 根目录", "/api/fs?path=/")
     check("fs 沙盒",
           "/api/fs?path=/var/mobile/Library/RemoteDebug")
-    check("读 crash.log",
-          "/api/file?path=/var/mobile/Library/RemoteDebug/com.floatingislandapps.grow/crash.log",
-          timeout=15)
-    check("读 last.log",
-          "/api/file?path=/var/mobile/Library/RemoteDebug/com.floatingislandapps.grow/last.log",
-          timeout=15)
+    # 日志落在 app 自己的沙盒 Documents 里（没有 no-sandbox 权限写不了 /var/mobile/Library），
+    # 而容器 UUID 每次重装都会变，所以必须先从 info 里取 home 再拼路径
+    _, iraw, _, _ = call("/api/info")
+    info = jload(iraw) or {}
+    home = info.get("home", "")
+    if home:
+        check("读 last.log", "/api/file?path=%s/Documents/RemoteDebug/last.log" % home,
+              timeout=15)
+        check("读 crash.log", "/api/file?path=%s/Documents/RemoteDebug/crash.log" % home,
+              timeout=15)
+    else:
+        results.append(("读日志", False, 0, "info 没返回 home"))
 
     # ---------- defaults ----------
     check("defaults 标准域", "/api/defaults", timeout=15)
