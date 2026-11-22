@@ -1,3 +1,4 @@
 *.zip
 .workbuddy/
 .DS_Store
+*.json.bak
