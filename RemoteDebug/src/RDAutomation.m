@@ -282,6 +282,42 @@ BOOL RDTapView(UIView *v) {
 
 
 
+
+#pragma mark - dump 所有窗口（诊断广告遮罩用）
+
+static void RDRecDump(UIView *v, NSMutableString *out, int depth) {
+    if (!v || depth > 24) return;
+    UIColor *bg = v.backgroundColor;
+    CGFloat white = -1, alpha = -1;
+    NSString *bgDesc = @"-";
+    if (bg && [bg getWhite:&white alpha:&alpha]) {
+        bgDesc = [NSString stringWithFormat:@"w=%.2f a=%.2f", white, alpha];
+    }
+    NSString *pad = [@"" stringByPaddingToLength:(NSUInteger)(depth * 2)
+                                      withString:@" " startingAtIndex:0];
+    [out appendFormat:@"%@%@ <%p> f=(%.0f,%.0f,%.0f,%.0f) hid=%d a=%.2f bg=%@\n",
+        pad, NSStringFromClass([v class]), (__bridge void *)v,
+        v.frame.origin.x, v.frame.origin.y, v.frame.size.width, v.frame.size.height,
+        v.hidden, v.alpha, bgDesc];
+    for (UIView *sub in v.subviews) {
+        RDRecDump(sub, out, depth + 1);
+    }
+}
+
+NSString *RDDumpAllWindows(void) {
+    __block NSMutableString *out = [NSMutableString string];
+    RDRunOnMain(^id{
+        NSArray *ws = [UIApplication sharedApplication].windows;
+        for (UIWindow *w in ws) {
+            [out appendFormat:@"\n== window <%p> level=%.0f hid=%d key=%d ==\n",
+                (__bridge void *)w, w.windowLevel, w.hidden, w.isKeyWindow];
+            RDRecDump(w, out, 1);
+        }
+        return (id)nil;
+    });
+    return out;
+}
+
 #pragma mark - Accessibility 兜底（SwiftUI 专用）
 
 // SwiftUI 的卡片既不是 UIControl 也没有独立 UIView，

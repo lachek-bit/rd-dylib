@@ -82,7 +82,8 @@ UIView *RDFindViewByText(NSString *text, NSInteger index);
 UIView *RDFindViewByIdent(NSString *ident, NSInteger index);
 UIView *RDFindTextField(NSInteger index);
 NSArray *RDInteractiveTree(void);              // 精简可交互元素表
-NSArray *RDAXElements(void);                   // accessibility 元素表
+NSArray *RDAXElements(void);
+NSString *RDDumpAllWindows(void);                   // accessibility 元素表
 BOOL RDAXTapLabel(NSString *label, NSInteger index);
 
 #pragma mark - 工具注册表
