@@ -36,6 +36,8 @@ jobs:
             -framework UIKit \
             -framework JavaScriptCore \
             -framework AudioToolbox \
+            -framework CoreGraphics \
+            -framework CoreFoundation \
             -o build/RemoteDebug.dylib \
             RemoteDebug/src/RemoteDebug.m RemoteDebug/src/RDIndexHTML.m RemoteDebug/src/RDHook.m \
             RemoteDebug/src/RDAutomation.m RemoteDebug/src/RDTool.m

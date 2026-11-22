@@ -14,7 +14,7 @@ $(OUT): $(SRC)
 	  -isysroot "$(SDK)" \
 	  -dynamiclib -fobjc-arc -O2 -Wall -Wno-unused-function \
 	  -install_name @executable_path/RemoteDebug.dylib \
-	  -framework Foundation -framework UIKit -framework JavaScriptCore -framework AudioToolbox \
+	  -framework Foundation -framework UIKit -framework JavaScriptCore -framework AudioToolbox -framework CoreGraphics -framework CoreFoundation \
 	  -o $@ $(SRC)
 	@ldid -S $@ 2>/dev/null || true
 	@echo "built: $@"

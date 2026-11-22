@@ -29,6 +29,8 @@ xcrun --sdk iphoneos clang \
   -framework UIKit \
   -framework JavaScriptCore \
   -framework AudioToolbox \
+  -framework CoreGraphics \
+  -framework CoreFoundation \
   -o "$OUT/RemoteDebug.dylib" \
   src/RemoteDebug.m src/RDIndexHTML.m src/RDHook.m \
   src/RDAutomation.m src/RDTool.m
