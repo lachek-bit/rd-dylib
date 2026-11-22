@@ -1,0 +1,58 @@
+name: build-dylib
+
+# 推上来就自动编译，产出 RemoteDebug.dylib（arm64 / iOS 14+）
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show SDK
+        run: |
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Build dylib
+        run: |
+          set -euxo pipefail
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          mkdir -p build
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -miphoneos-version-min=14.0 \
+            -isysroot "$SDK" \
+            -dynamiclib \
+            -fobjc-arc \
+            -O2 \
+            -Wall \
+            -Wno-unused-function \
+            -install_name @executable_path/RemoteDebug.dylib \
+            -framework Foundation \
+            -framework UIKit \
+            -framework JavaScriptCore \
+            -framework AudioToolbox \
+            -o build/RemoteDebug.dylib \
+            RemoteDebug/src/RemoteDebug.m RemoteDebug/src/RDIndexHTML.m RemoteDebug/src/RDHook.m \
+            RemoteDebug/src/RDAutomation.m RemoteDebug/src/RDTool.m
+
+      - name: Sign with ldid
+        run: |
+          brew install ldid || true
+          ldid -S build/RemoteDebug.dylib || true
+
+      - name: Verify
+        run: |
+          file build/RemoteDebug.dylib
+          otool -L build/RemoteDebug.dylib || true
+          otool -l build/RemoteDebug.dylib | grep -A4 LC_LOAD_DYLIB || true
+          ls -lh build/RemoteDebug.dylib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RemoteDebug-dylib
+          path: build/RemoteDebug.dylib
+          if-no-files-found: error
