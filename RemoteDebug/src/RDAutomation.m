@@ -30,6 +30,7 @@ static RDIOHIDEventRef (*fnCreateFinger)(CFAllocatorRef, uint64_t, uint32_t, uin
 static void (*fnAppendEvent)(RDIOHIDEventRef, RDIOHIDEventRef);
 static void (*fnDispatchEvent)(RDIOHIDClientRef, RDIOHIDEventRef);
 static RDIOHIDClientRef (*fnClientCreate)(CFAllocatorRef);
+static void (*fnSetInt)(RDIOHIDEventRef, uint32_t, long long);
 
 static BOOL gHIDReady = NO;
 static RDIOHIDClientRef gHIDClient = NULL;
@@ -55,6 +56,8 @@ static void RDLoadHID(void) {
             dlsym(h, "IOHIDEventSystemClientDispatchEvent");
         fnClientCreate = (RDIOHIDClientRef (*)(CFAllocatorRef))
             dlsym(h, "IOHIDEventSystemClientCreate");
+        fnSetInt = (void (*)(RDIOHIDEventRef, uint32_t, long long))
+            dlsym(h, "IOHIDEventSetIntegerValue");
 
         if (!fnCreateDigitizerEvent || !fnCreateFinger || !fnAppendEvent ||
             !fnDispatchEvent || !fnClientCreate) {
@@ -275,6 +278,76 @@ BOOL RDTapView(UIView *v) {
         return (id)nil;
     });
     return ok;
+}
+
+
+#pragma mark - 诊断 / 可调参数注入
+
+NSDictionary *RDhidDiagnose(void) {
+    RDLoadHID();
+    return @{
+        @"ready":      @(gHIDReady),
+        @"error":      gHIDError ?: @"",
+        @"client":     @(gHIDClient != NULL),
+        @"fn_event":   @(fnCreateDigitizerEvent != NULL),
+        @"fn_finger":  @(fnCreateFinger != NULL),
+        @"fn_append":  @(fnAppendEvent != NULL),
+        @"fn_dispatch": @(fnDispatchEvent != NULL),
+        @"fn_client":  @(fnClientCreate != NULL),
+        @"fn_setint":  @(fnSetInt != NULL),
+    };
+}
+
+// scale: 坐标放大倍数（1 = 点，3 = 像素，iPhone 14 Pro 是 3x）
+// integrated: 是否设置 IsDisplayIntegrated 字段
+BOOL RDTapPointScaled(CGPoint p, double scale, BOOL integrated) {
+    RDLoadHID();
+    if (!gHIDReady) return NO;
+    if (scale <= 0) scale = 1.0;
+
+    CGPoint q = CGPointMake(p.x * scale, p.y * scale);
+    uint64_t t = mach_absolute_time();
+
+    RDIOHIDEventRef hand = fnCreateDigitizerEvent(
+        kCFAllocatorDefault, t, 3, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 1, 1, 0);
+    if (!hand) return NO;
+
+    RDIOHIDEventRef finger = fnCreateFinger(
+        kCFAllocatorDefault, t, 0, 2, 0x07,
+        q.x, q.y, 0, 1, 0, 1, 1, 0);
+    if (finger) {
+        fnAppendEvent(hand, finger);
+        CFRelease(finger);
+    }
+
+    if (integrated && fnSetInt) {
+        // kIOHIDEventFieldDigitizerIsDisplayIntegrated ≈ 0x000B0019
+        fnSetInt(hand, 0x000B0019, 1);
+    }
+
+    fnDispatchEvent(gHIDClient, hand);
+    CFRelease(hand);
+    usleep(40000);
+
+    // 抬手
+    uint64_t t2 = mach_absolute_time();
+    RDIOHIDEventRef hand2 = fnCreateDigitizerEvent(
+        kCFAllocatorDefault, t2, 3, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0);
+    if (hand2) {
+        RDIOHIDEventRef f2 = fnCreateFinger(
+            kCFAllocatorDefault, t2, 0, 2, 0x03,
+            q.x, q.y, 0, 0, 0, 0, 0, 0);
+        if (f2) { fnAppendEvent(hand2, f2); CFRelease(f2); }
+        if (integrated && fnSetInt) {
+            fnSetInt(hand2, 0x000B0019, 1);
+        }
+        fnDispatchEvent(gHIDClient, hand2);
+        CFRelease(hand2);
+    }
+    usleep(20000);
+    return YES;
 }
 
 #pragma mark - 精简可交互元素表

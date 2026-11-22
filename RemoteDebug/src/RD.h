@@ -68,6 +68,8 @@ NSString *RDEvalSource(NSString *code);
 #pragma mark - 自动化 / 触摸注入
 
 BOOL RDIsHIDReady(void);
+NSDictionary *RDhidDiagnose(void);
+BOOL RDTapPointScaled(CGPoint p, double scale, BOOL integrated);
 BOOL RDInjectTouch(CGPoint p, BOOL down);      // 注入真实触摸（IOHIDEvent）
 BOOL RDTapPoint(CGPoint p);                    // 屏幕坐标点一下
 BOOL RDTapView(UIView *v);                     // 点某个控件

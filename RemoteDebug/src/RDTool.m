@@ -348,6 +348,25 @@ static void RDToolRegisterUIGroup(void) {
             return @{@"ok": @(RDTapView(v)), @"cls": NSStringFromClass([v class]) ?: @""};
         });
 
+    RDRegisterTool(@"hid.status", @"触摸注入状态",
+        @"诊断 IOHID 是否可用（点击无效时先看这个）",
+        @[], @"点", ^id(NSDictionary *a) {
+            return RDhidDiagnose();
+        });
+
+    RDRegisterTool(@"hid.tap", @"原始触摸注入",
+        @"带 scale / integrated 开关的底层点击，用来试参数",
+        @[P(@"x", @"number", YES, @"屏幕 x（点）"),
+          P(@"y", @"number", YES, @"屏幕 y（点）"),
+          P(@"scale", @"number", NO, @"坐标倍数，默认 1；无效就试 3"),
+          P(@"integrated", @"bool", NO, @"是否设 IsDisplayIntegrated")], @"点", ^id(NSDictionary *a) {
+            CGPoint p = CGPointMake(RDArgNum(a, @"x", 0), RDArgNum(a, @"y", 0));
+            double sc = RDArgNum(a, @"scale", 1.0);
+            BOOL ok = RDTapPointScaled(p, sc, RDArgBool(a, @"integrated", NO));
+            RDLogAppend([NSString stringWithFormat:@"[HID] tap (%.0f,%.0f) scale=%.1f -> %d", p.x, p.y, sc, ok]);
+            return @{@"ok": @(ok), @"x": @(p.x), @"y": @(p.y), @"scale": @(sc)};
+        });
+
     RDRegisterTool(@"ui.swipe", @"滑动",
         @"从一点滑到另一点，用于翻页/返回",
         @[P(@"x1", @"number", YES, @"起点 x"), P(@"y1", @"number", YES, @"起点 y"),
