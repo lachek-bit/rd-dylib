@@ -486,7 +486,8 @@ void RDAdBlockSet(BOOL on) {
     gAdBlockOn = on;
     if (on && !gAdBlockLog) gAdBlockLog = [NSMutableArray array];
     pthread_mutex_unlock(&gAdLock);
-    RDLogAppend([NSString stringWithFormat:@"[AD] 拦截 %@", on ? @"开启" : @"关闭"]);
+    RDAdSaveConfig();
+    RDLogAppend([NSString stringWithFormat:@"[AD] 拦截 %@（已持久化）", on ? @"开启" : @"关闭"]);
 }
 
 // SDK 类名前缀（国内常见聚合广告）
@@ -513,7 +514,20 @@ static void RDAdLoadExtraPrefix(void) {
     NSData *d = [NSData dataWithContentsOfFile:RDAdblockConfigPath()];
     if (d.length) {
         id obj = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
-        if ([obj isKindOfClass:[NSArray class]]) {
+        if ([obj isKindOfClass:[NSDictionary class]]) {
+            NSArray *ex = obj[@"extra"];
+            if ([ex isKindOfClass:[NSArray class]]) {
+                for (id x in ex) {
+                    if ([x isKindOfClass:[NSString class]] && [(NSString *)x length]) {
+                        [gAdExtraPrefix addObject:x];
+                    }
+                }
+            }
+            if ([obj[@"on"] isKindOfClass:[NSNumber class]]) {
+                gAdBlockOn = [obj[@"on"] boolValue];
+            }
+        } else if ([obj isKindOfClass:[NSArray class]]) {
+            // 兼容旧格式（纯数组）
             for (id x in obj) {
                 if ([x isKindOfClass:[NSString class]] && [(NSString *)x length]) {
                     [gAdExtraPrefix addObject:x];
@@ -522,6 +536,18 @@ static void RDAdLoadExtraPrefix(void) {
         }
     }
     pthread_mutex_unlock(&gAdExtraLock);
+}
+
+// 把 on + extra 一起写回配置
+static void RDAdSaveConfig(void) {
+    pthread_mutex_lock(&gAdExtraLock);
+    NSMutableDictionary *cfg = [NSMutableDictionary dictionary];
+    cfg[@"on"] = @(gAdBlockOn);
+    cfg[@"extra"] = [gAdExtraPrefix copy] ?: @[];
+    NSDictionary *snap = [cfg copy];
+    pthread_mutex_unlock(&gAdExtraLock);
+    NSData *d = [NSJSONSerialization dataWithJSONObject:snap options:0 error:nil];
+    if (d) [d writeToFile:RDAdblockConfigPath() atomically:YES];
 }
 
 NSArray *RDAdExtraList(void) {
@@ -538,20 +564,16 @@ void RDAdExtraAdd(NSString *prefix) {
     BOOL exists = NO;
     for (NSString *x in gAdExtraPrefix) if ([x isEqualToString:prefix]) { exists = YES; break; }
     if (!exists) [gAdExtraPrefix addObject:prefix];
-    NSArray *snap = [gAdExtraPrefix copy];
     pthread_mutex_unlock(&gAdExtraLock);
-    NSData *d = [NSJSONSerialization dataWithJSONObject:snap options:0 error:nil];
-    if (d) [d writeToFile:RDAdblockConfigPath() atomically:YES];
+    RDAdSaveConfig();
     RDLogAppend([NSString stringWithFormat:@"[AD] 额外前缀 +%@", prefix]);
 }
 
 void RDAdExtraRemove(NSString *prefix) {
     pthread_mutex_lock(&gAdExtraLock);
     [gAdExtraPrefix removeObject:prefix];
-    NSArray *snap = [gAdExtraPrefix copy];
     pthread_mutex_unlock(&gAdExtraLock);
-    NSData *d = [NSJSONSerialization dataWithJSONObject:snap options:0 error:nil];
-    if (d) [d writeToFile:RDAdblockConfigPath() atomically:YES];
+    RDAdSaveConfig();
 }
 // 二次确认关键词（防止 BU→BufferLayer 这类误伤）
 static const char *kAdWord[] = {
