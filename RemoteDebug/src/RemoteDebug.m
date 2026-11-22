@@ -25,6 +25,8 @@
 #import <sys/stat.h>
 #import <sys/sysctl.h>
 #import <sys/time.h>
+#import <execinfo.h>
+#import <signal.h>
 
 #import "RD.h"
 
@@ -45,6 +47,27 @@
 static NSMutableArray<NSDictionary *> *gLogs = nil;
 static NSUInteger gLogSeq = 0;
 static pthread_mutex_t gLogLock = PTHREAD_MUTEX_INITIALIZER;
+static int gLogFD = -1;
+static dispatch_queue_t gLogQueue = nil;
+
+// 日志同时落盘，崩溃后还能看到死之前的最后几步
+static void RDLogWriteToFile(NSString *s) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        gLogQueue = dispatch_queue_create("com.rd.logwriter", DISPATCH_QUEUE_SERIAL);
+    });
+    NSString *line = [NSString stringWithFormat:@"%.3f %@\n",
+                      [[NSDate date] timeIntervalSince1970], s];
+    NSData *d = [line dataUsingEncoding:NSUTF8StringEncoding];
+    if (!d.length) return;
+    dispatch_async(gLogQueue, ^{
+        if (gLogFD < 0) {
+            NSString *p = [RDDataDir() stringByAppendingPathComponent:@"last.log"];
+            gLogFD = open([p fileSystemRepresentation], O_WRONLY | O_CREAT | O_APPEND, 0644);
+        }
+        if (gLogFD >= 0) (void)!write(gLogFD, d.bytes, d.length);
+    });
+}
 
 void RDLogAppend(NSString *s) {
     if (s.length == 0) return;
@@ -56,6 +79,7 @@ void RDLogAppend(NSString *s) {
                        @"s": s}];
     while (gLogs.count > RD_MAX_LOGS) [gLogs removeObjectAtIndex:0];
     pthread_mutex_unlock(&gLogLock);
+    RDLogWriteToFile(s);
 }
 
 void RDLogClear(void) {
@@ -275,10 +299,25 @@ static NSArray<NSString *> *RDAllClassNames(void) {
     Class *buf = (Class *)malloc(sizeof(Class) * (size_t)n);
     if (!buf) return @[];
     n = objc_getClassList(buf, n);
+    if (n <= 0) { free(buf); return @[]; }
+
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
     for (int i = 0; i < n; i++) {
         const char *s = class_getName(buf[i]);
-        if (s) [arr addObject:@(s)];
+        if (!s) continue;
+        // 关键：@(s) 遇到非法 UTF-8 会返回 nil，addObject:nil 直接抛异常，
+        // 之前 /api/classes 连续调用把 app 打崩就死在这
+        @try {
+            NSString *name = [NSString stringWithUTF8String:s];
+            if (!name) {
+                name = [[NSString alloc] initWithBytes:s
+                                                length:strlen(s)
+                                              encoding:NSISOLatin1StringEncoding];
+            }
+            if (name.length) [arr addObject:name];
+        } @catch (NSException *e) {
+            (void)e;
+        }
     }
     free(buf);
     return arr;
@@ -1059,6 +1098,66 @@ static void RDStartServer(void) {
     });
 }
 
+#pragma mark - 崩溃栈记录
+
+static char gCrashLogPath[600] = {0};
+
+static void RDCrashHandler(int sig, siginfo_t *info, void *uap) {
+    (void)uap;
+    int fd = gCrashLogPath[0] ? open(gCrashLogPath, O_WRONLY | O_CREAT | O_APPEND, 0644) : -1;
+    if (fd >= 0) {
+        char head[256];
+        int len = snprintf(head, sizeof(head),
+                           "\n===== CRASH signal=%d addr=%p time=%ld =====\n",
+                           sig, info ? info->si_addr : NULL, (long)time(NULL));
+        if (len > 0) (void)!write(fd, head, (size_t)len);
+        void *frames[64];
+        int n = backtrace(frames, 64);
+        if (n > 0) backtrace_symbols_fd(frames, n, fd);
+        (void)!write(fd, "===== END =====\n", 16);
+        close(fd);
+    }
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SIG_DFL;
+    sigaction(sig, &sa, NULL);
+    raise(sig);
+}
+
+static void RDInstallCrashHandler(void) {
+    static BOOL done = NO;
+    if (done) return;
+    done = YES;
+
+    @try {
+        NSString *dir = RDDataDir();
+        NSString *logPath = [dir stringByAppendingPathComponent:@"last.log"];
+        NSString *crashPath = [dir stringByAppendingPathComponent:@"crash.log"];
+
+        // last.log 超过 1MB 就清掉，防止无限增长
+        NSDictionary *attrs = [[NSFileManager defaultManager]
+                               attributesOfItemAtPath:logPath error:nil];
+        if ([attrs[NSFileSize] unsignedLongLongValue] > 1024ULL * 1024ULL) {
+            [[NSData data] writeToFile:logPath atomically:YES];
+        }
+
+        const char *cp = [crashPath fileSystemRepresentation];
+        if (cp) strncpy(gCrashLogPath, cp, sizeof(gCrashLogPath) - 1);
+    } @catch (NSException *e) {
+        (void)e;
+    }
+
+    int sigs[] = {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE, SIGTRAP};
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = RDCrashHandler;
+    sa.sa_flags = SA_SIGINFO;
+    for (size_t i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++) {
+        sigaction(sigs[i], &sa, NULL);
+    }
+    RDLogAppend(@"[RemoteDebug] 崩溃捕获已装");
+}
+
 #pragma mark - 注入入口
 
 __attribute__((constructor))
@@ -1066,6 +1165,7 @@ static void RDConstructor(void) {
     @autoreleasepool {
         // 立刻接管 stderr，越早越好
         RDStartStderrCapture();
+        RDInstallCrashHandler();
         RDLogAppend(@"[RemoteDebug] dylib 已加载");
 
         // 等 app 起来再开服务（UIKit / 网络栈就绪）
