@@ -393,7 +393,7 @@ static void RDJSBootstrap(void) {
     id (^app)(void) = ^id{ return [UIApplication sharedApplication]; };
     NSString * (^uiDump)(void) = ^NSString *{ return RDUIDump(); };
     NSArray * (^allClasses)(void) = ^NSArray *{ return RDAllClassNames(); };
-    id (^clsByName)(NSString *n) = ^id{ return NSClassFromString(n); };
+    id (^clsByName)(NSString *n) = ^id(NSString *nm) { return NSClassFromString(nm); };
     void (^log)(id) = ^(id s){ RDLogAppend([s description]); };
     id (^callCls)(NSString *, NSString *, NSArray *) =
         ^id(NSString *cls, NSString *sel, NSArray *args) {

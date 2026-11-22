@@ -30,6 +30,7 @@ jobs:
             -O2 \
             -Wall \
             -Wno-unused-function \
+            -Wno-arc-retain-cycles \
             -install_name @executable_path/RemoteDebug.dylib \
             -framework Foundation \
             -framework UIKit \
