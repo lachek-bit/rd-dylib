@@ -496,7 +496,7 @@ void RDAdBlockSet(BOOL on) {
 static const char *kAdPrefix[] = {
     "BU", "CSJ", "Pangle", "GDT", "KSAd", "KSFeed", "KSInterstitial",
     "MTG", "Mintegral", "Sigmob", "SIG", "GAD", "ATAggregated",
-    "QMRewarded", "QMInterstitial", "QMBanner", "Gromore", "ABU",
+    "QMRewarded", "QMInterstitial", "QMBanner", "QMSplash", "Gromore", "ABU",
     "CSJMediation", "BaiduMobAd", "WMAd", "QMU",
     // 小蚕实测：WindMill（风车聚合）+ 自家容器 XiaoCanAd
     "XiaoCanAd", "XiaoCan", "WindMill"
@@ -678,6 +678,39 @@ void RDInstallAdHook(void) {
             RDLogAppend(@"[AD] UIViewController present 拦截已装");
         }
     }
+}
+
+
+#pragma mark - 开屏广告拦截（腾讯 QMSplash）
+
+// 开屏广告在 app 启动瞬间显示，钩子得尽早装。QMSplashAd 是 app 的类，
+// constructor 阶段还没加载，所以用延迟重试，直到类出现为止。
+static BOOL gSplashGuardDone = NO;
+
+void RDInstallSplashGuard(void) {
+    if (gSplashGuardDone) return;
+    Class cls = objc_getClass("QMSplashAd");
+    if (!cls) return;   // 还没加载，等下次重试
+
+    NSArray *sels = @[@"showSplashWindow:",
+                      @"showSplashWindow:withBottomView:",
+                      @"showSplashViewController:",
+                      @"showSplashViewController:withBottomView:",
+                      @"showSplashAdWithController:bottomView:inWindow:"];
+    int n = 0;
+    for (NSString *sn in sels) {
+        SEL sel = NSSelectorFromString(sn);
+        Method m = class_getInstanceMethod(cls, sel);
+        if (!m) continue;
+        const char *types = method_getTypeEncoding(m);
+        id blk = ^void(id self, id a1, id a2, id a3) {
+            // 静默丢弃：开屏不弹
+        };
+        IMP imp = imp_implementationWithBlock(blk);
+        if (imp) { class_replaceMethod(cls, sel, imp, types); n++; }
+    }
+    gSplashGuardDone = YES;
+    RDLogAppend([NSString stringWithFormat:@"[AD] 开屏广告拦截已装（%d 个方法）", n]);
 }
 
 #pragma mark - UserDefaults 写入保护
