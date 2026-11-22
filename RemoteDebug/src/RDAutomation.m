@@ -281,6 +281,116 @@ BOOL RDTapView(UIView *v) {
 }
 
 
+
+#pragma mark - Accessibility 兜底（SwiftUI 专用）
+
+// SwiftUI 的卡片既不是 UIControl 也没有独立 UIView，
+// 但它会生成 accessibility 元素。这条路不依赖 IOHID，也不碰系统类。
+
+static void RDCollectAX(id obj, int depth, NSMutableArray *out) {
+    if (!obj || depth > 40 || out.count >= 300) return;
+
+    if ([obj respondsToSelector:@selector(accessibilityElementCount)]) {
+        NSInteger n = (NSInteger)[obj accessibilityElementCount];
+        for (NSInteger i = 0; i < n && out.count < 300; i++) {
+            id el = nil;
+            @try {
+                el = [obj accessibilityElementAtIndex:i];
+            } @catch (NSException *e) {
+                el = nil;
+            }
+            if (!el) continue;
+
+            NSString *label = nil;
+            CGRect frame = CGRectZero;
+            uintptr_t ptr = (uintptr_t)(__bridge void *)el;
+            @try {
+                if ([el respondsToSelector:@selector(accessibilityLabel)])
+                    label = [el accessibilityLabel];
+                if ([el respondsToSelector:@selector(accessibilityFrame)])
+                    frame = [el accessibilityFrame];
+            } @catch (NSException *e) {
+                (void)e;
+            }
+
+            if (label.length || !CGRectIsEmpty(frame)) {
+                [out addObject:@{
+                    @"label": label ?: @"",
+                    @"frame": NSStringFromCGRect(frame),
+                    @"ptr": [NSString stringWithFormat:@"0x%lx", (unsigned long)ptr],
+                    @"traits": @([el respondsToSelector:@selector(accessibilityTraits)]
+                                 ? (long long)[el accessibilityTraits] : 0)
+                }];
+            }
+            RDCollectAX(el, depth + 1, out);
+        }
+    }
+
+    if ([obj isKindOfClass:[UIView class]]) {
+        for (UIView *sub in ((UIView *)obj).subviews) {
+            RDCollectAX(sub, depth + 1, out);
+        }
+    }
+}
+
+NSArray *RDAXElements(void) {
+    NSMutableArray *out = [NSMutableArray array];
+    RDRunOnMain(^id{
+        UIWindow *w = RDKeyWindow();
+        if (!w) return (id)nil;
+        // 有些 SwiftUI 视图要触发一次屏幕变化通知才会把 accessibility 树建出来
+        @try {
+            UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, nil);
+        } @catch (NSException *e) { (void)e; }
+        RDCollectAX(w, 0, out);
+        return (id)nil;
+    });
+    return out;
+}
+
+// 按 label 包含匹配，index 选第几个，直接 accessibilityActivate
+BOOL RDAXTapLabel(NSString *label, NSInteger index) {
+    if (!label.length) return NO;
+    __block BOOL ok = NO;
+    RDRunOnMain(^id{
+        UIWindow *w = RDKeyWindow();
+        if (!w) return (id)nil;
+
+        @try {
+            UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, nil);
+        } @catch (NSException *e) { (void)e; }
+
+        NSMutableArray *hits = [NSMutableArray array];
+        NSMutableArray *all = [NSMutableArray array];
+        RDCollectAX(w, 0, all);
+        for (NSDictionary *d in all) {
+            NSString *l = d[@"label"];
+            if (l.length && [l rangeOfString:label
+                                     options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                [hits addObject:d];
+            }
+        }
+        if (hits.count == 0) return (id)nil;
+        NSInteger i = MAX(0, MIN(index, (NSInteger)hits.count - 1));
+        NSDictionary *d = hits[(NSUInteger)i];
+
+        void *raw = NULL;
+        sscanf([d[@"ptr"] UTF8String], "%p", &raw);
+        id el = (__bridge id)raw;
+        if (!el || ![el respondsToSelector:@selector(accessibilityActivate)]) return (id)nil;
+
+        @try {
+            ok = [el accessibilityActivate];
+        } @catch (NSException *e) {
+            (void)e;
+            ok = NO;
+        }
+        RDLogAppend([NSString stringWithFormat:@"[AX] activate \"%@\" -> %d", d[@"label"], ok]);
+        return (id)nil;
+    });
+    return ok;
+}
+
 #pragma mark - 诊断 / 可调参数注入
 
 NSDictionary *RDhidDiagnose(void) {

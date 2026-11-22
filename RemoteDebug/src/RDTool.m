@@ -368,6 +368,23 @@ static void RDToolRegisterUIGroup(void) {
             return @{@"ok": @(ok), @"x": @(p.x), @"y": @(p.y), @"scale": @(sc)};
         });
 
+    RDRegisterTool(@"ui.ax", @"Accessibility 元素表",
+        @"列出 accessibility 元素（SwiftUI 界面用这个找可点目标）",
+        @[], @"看", ^id(NSDictionary *a) {
+            NSArray *els = RDAXElements();
+            return @{@"count": @(els.count), @"items": els};
+        });
+
+    RDRegisterTool(@"ui.axTap", @"按无障碍标签点击",
+        @"用 accessibilityActivate 触发，能点 SwiftUI 卡片",
+        @[P(@"label", @"string", YES, @"标签包含的文字"),
+          P(@"index", @"number", NO, @"第几个，默认 0")], @"点", ^id(NSDictionary *a) {
+            NSString *l = RDArgStr(a, @"label", nil);
+            if (!l.length) return @{@"ok": @NO, @"error": @"缺少 label"};
+            BOOL ok = RDAXTapLabel(l, RDArgInt(a, @"index", 0));
+            return @{@"ok": @(ok), @"label": l};
+        });
+
     RDRegisterTool(@"ui.swipe", @"滑动",
         @"从一点滑到另一点，用于翻页/返回",
         @[P(@"x1", @"number", YES, @"起点 x"), P(@"y1", @"number", YES, @"起点 y"),
