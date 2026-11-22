@@ -649,6 +649,35 @@ void RDInstallAdHook(void) {
         RDAdLoadExtraPrefix();
         RDLogAppend(@"[AD] UIView addSubview: 钩子已装");
     }
+
+    // 再装 presentViewController 拦截：插屏/激励广告不走 addSubview，
+    // 而是模态 present 出来的。检查要弹出的 VC 类名，命中广告特征就拦。
+    Class vcCls = objc_getClass("UIViewController");
+    SEL vcSel = @selector(presentViewController:animated:completion:);
+    Method vm = vcCls ? class_getInstanceMethod(vcCls, vcSel) : NULL;
+    if (vm) {
+        IMP vcOrig = method_getImplementation(vm);
+        const char *vcTypes = method_getTypeEncoding(vm);
+        id vcBlk = ^void(id self, id vc, id animated, id completion) {
+            if (gAdBlockOn && vc) {
+                const char *cn = object_getClassName(vc);
+                if (RDIsAdClassName(cn)) {
+                    pthread_mutex_lock(&gAdLock);
+                    if (gAdBlockLog.count < 200) {
+                        [gAdBlockLog addObject:[@"present:" stringByAppendingString:@(cn)]];
+                    }
+                    pthread_mutex_unlock(&gAdLock);
+                    return;   // 拦掉这个广告 VC 的弹出
+                }
+            }
+            if (vcOrig) ((void (*)(id, SEL, id, id, id))vcOrig)(self, vcSel, vc, animated, completion);
+        };
+        IMP vcImp = imp_implementationWithBlock(vcBlk);
+        if (vcImp) {
+            class_replaceMethod(vcCls, vcSel, vcImp, vcTypes);
+            RDLogAppend(@"[AD] UIViewController present 拦截已装");
+        }
+    }
 }
 
 #pragma mark - UserDefaults 写入保护
