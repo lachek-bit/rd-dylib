@@ -691,9 +691,39 @@ static BOOL gSplashGuardDone = NO;
 
 void RDInstallSplashGuard(void) {
     if (gSplashGuardDone) return;
+
+    // 1) 小蚕实际用的开屏广告：PTGFancySplashProxy（日志里 dealloc 暴露的）
+    Class ptg = objc_getClass("PTGFancySplashProxy");
+    if (ptg) {
+        int n = 0;
+        // showAdFromRootViewController:bottomView:  —— 展示开屏
+        SEL s1 = @selector(showAdFromRootViewController:bottomView:);
+        Method m1 = class_getInstanceMethod(ptg, s1);
+        if (m1) {
+            const char *types = method_getTypeEncoding(m1);
+            id blk = ^void(id self, id vc, id bottom) { /* 静默丢弃 */ };
+            IMP imp = imp_implementationWithBlock(blk);
+            if (imp) { class_replaceMethod(ptg, s1, imp, types); n++; }
+        }
+        // loadSplashAd —— 连加载都省了
+        SEL s2 = @selector(loadSplashAd);
+        Method m2 = class_getInstanceMethod(ptg, s2);
+        if (m2) {
+            const char *types = method_getTypeEncoding(m2);
+            id blk = ^void(id self) { /* 静默丢弃 */ };
+            IMP imp = imp_implementationWithBlock(blk);
+            if (imp) { class_replaceMethod(ptg, s2, imp, types); n++; }
+        }
+        if (n > 0) {
+            gSplashGuardDone = YES;
+            RDLogAppend([NSString stringWithFormat:@"[AD] 开屏广告拦截已装 PTGFancySplashProxy（%d 方法）", n]);
+        }
+        return;
+    }
+
+    // 2) 备用：腾讯 QMSplashAd（别的 app 可能用）
     Class cls = objc_getClass("QMSplashAd");
     if (!cls) return;   // 还没加载，等下次重试
-
     NSArray *sels = @[@"showSplashWindow:",
                       @"showSplashWindow:withBottomView:",
                       @"showSplashViewController:",
@@ -705,14 +735,12 @@ void RDInstallSplashGuard(void) {
         Method m = class_getInstanceMethod(cls, sel);
         if (!m) continue;
         const char *types = method_getTypeEncoding(m);
-        id blk = ^void(id self, id a1, id a2, id a3) {
-            // 静默丢弃：开屏不弹
-        };
+        id blk = ^void(id self, id a1, id a2, id a3) { /* 静默丢弃 */ };
         IMP imp = imp_implementationWithBlock(blk);
         if (imp) { class_replaceMethod(cls, sel, imp, types); n++; }
     }
     gSplashGuardDone = YES;
-    RDLogAppend([NSString stringWithFormat:@"[AD] 开屏广告拦截已装（%d 个方法）", n]);
+    RDLogAppend([NSString stringWithFormat:@"[AD] 开屏广告拦截已装 QMSplashAd（%d 方法）", n]);
 }
 
 #pragma mark - UserDefaults 写入保护
