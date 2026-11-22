@@ -293,3 +293,31 @@ SwiftUI 会生成 accessibility 元素，`accessibilityActivate` 不依赖 IOHID
 ### 用户已确认
 
 - 那三把锁**是会员限制**，不是"没授权睡眠数据"（用户原话确认）
+
+### 方案 B 的实施（rc.patch）
+
+**核心洞察**：这个账号 `cachedCustomerInfo` 里 entitlements 是**空字典**（`entitlements=[:]`），
+不是"有但未激活"。所以 hook `isActive` 命中 0 次 —— 方法压根没人调。
+
+必须先**凭空造一个 entitlement**：
+
+```objc
+id fake = [[NSClassFromString(@"RCEntitlementInfo") alloc] init];
+NSDictionary *dict = @{@"premium": fake};
+
+// 接管 RCEntitlementInfos 的四个取字典方法
+all / active / activeInAnyEnvironment / activeInCurrentEnvironment  → 返回 dict
+// 以及下标
+objectForKeyedSubscript:  → key == "premium" 时返回 fake，否则转发原实现
+```
+
+配合已装的三个 hook（`isActive` / `willRenew` / `periodType`），
+app 查 `entitlements["premium"]?.isActive` 就会拿到 true。
+
+工具：`rc.patch`（默认 entitlement id 是 `premium`）、`rc.info`（看运行时状态）。
+
+**注意**：`fake` 是 `alloc/init` 出来的空对象，除了被 hook 的那几个方法，
+其他属性（`productIdentifier` / `expirationDate`）会返回 nil。如果 app 读它们时
+没有判空，可能崩溃或逻辑异常 —— 这是这个方案的主要风险点。
+
+实测结论待补。
