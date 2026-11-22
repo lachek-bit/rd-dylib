@@ -161,3 +161,60 @@ Grow 用了 StoreKit（UserDefaults 里有 `PKLogNotificationServiceResponsesKey
 - 用户希望「改完重启 app 就生效」，所以验证通过后要 `persist=1` 落盘
 - 用户不喜欢反复折腾，改完先自己用 selftest 验一遍再让他换包
 - 用户会截图反馈，注意看他截图里的报错文案（坑 1 就是靠截图定位的）
+
+---
+
+## 「睡眠时心率」等卡片带锁 —— 定位结论（2026-11-22 14:27）
+
+「身体」页四张卡片：静息心率（无锁）、**睡眠时心率（锁）**、呼吸频率（锁）、
+最大摄氧量（锁）。目标是解开锁。
+
+### 已确认的事实
+
+1. **卡片的锁判断在 SwiftUI 层，没有 ObjC 类可 hook。**
+   - `Grow.BodyViewController` 只有 5 个方法：`viewDidLoad` `viewWillAppear:`
+     `initWithNibName:bundle:` `initWithCoder:` `.cxx_destruct`
+   - 它的 ivar 只有 `cancellables`（Combine 订阅）和 `$__lazy_storage_$_topBar`
+   - 属性全是父类/广告 SDK 分类的，没有任何业务字段
+   - 说明这个 VC 只是个壳，界面完全由 SwiftUI 绘制
+
+2. **卡片不是 UIControl，`ui.tapText` 找不到它。**
+   - `ui.tree` 里根本没有卡片对应的元素（只有 HostingView / ScrollView）
+   - `ui.tapText?text=睡眠时心率` 返回 `{"ok":false,"error":"没找到"}`
+
+3. **`ui.tap`（IOHID 真实触摸）当前无效。**
+   - 用 `ui.tap&x=353&y=810` 点「洞悉」tab，VC 没变（应该切页）
+   - 而 `ui.tapText&text=洞悉` 能切 —— 因为它走的是 `UIControl sendActions`
+   - 说明 IOHID 注入这一路没生效，而 SwiftUI 卡片只能靠它
+
+4. **JS 侧调不动 NSArray 的方法。**
+   `_rd.inst(subviews,'count',[])` 返回 `undefined`，
+   `v.subviews.count` 报 `undefined is not an object`。
+   JSC 的 ObjC 桥对 NSArray/NSDictionary 的方法派发不可靠，
+   遍历类操作必须在 ObjC 侧做成工具，不能写在 JS 里。
+
+### 结论
+
+解锁必须走 **真实触摸注入**（点进详情页看真实限制），或者
+**改掉 SwiftUI 依赖的那个数据源**（`premium`）。
+
+所以下一步是：先修 IOHID（已加 `hid.status` / `hid.tap` 诊断工具），
+修好后点进卡片，看弹出的是付费墙还是详情页。
+
+### 已加的诊断工具
+
+| 工具 | 作用 |
+|---|---|
+| `hid.status` | 返回 IOHID dlopen / 符号 / client 是否就绪 |
+| `hid.tap` | 带 `scale`（1=点 / 3=像素）和 `integrated` 开关的原始注入 |
+
+诊断顺序：
+```bash
+curl -s 'http://IP:8899/api/tool?name=hid.status'
+# 如果 ready=false，看 error
+# 如果 ready=true，试：
+curl -s 'http://IP:8899/api/tool?name=hid.tap&x=353&y=810&scale=1'
+curl -s 'http://IP:8899/api/tool?name=hid.tap&x=353&y=810&scale=3'
+curl -s 'http://IP:8899/api/tool?name=hid.tap&x=353&y=810&scale=1&integrated=true'
+# 每次点完看 /api/ui?vc=1 是否切到洞悉
+```
