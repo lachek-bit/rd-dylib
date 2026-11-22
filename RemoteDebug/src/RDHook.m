@@ -481,6 +481,8 @@ NSArray *RDAdBlockLog(void) {
     return a;
 }
 
+static void RDAdSaveConfig(void);   // 前向声明（定义在后面）
+
 void RDAdBlockSet(BOOL on) {
     pthread_mutex_lock(&gAdLock);
     gAdBlockOn = on;
