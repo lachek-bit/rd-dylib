@@ -498,6 +498,61 @@ static const char *kAdPrefix[] = {
     // 小蚕实测：WindMill（风车聚合）+ 自家容器 XiaoCanAd
     "XiaoCanAd", "XiaoCan", "WindMill"
 };
+
+// 额外前缀：从 adblock.json 读，可热更（改了重启就生效，不用换 dylib）
+static NSMutableArray<NSString *> *gAdExtraPrefix = nil;
+static pthread_mutex_t gAdExtraLock = PTHREAD_MUTEX_INITIALIZER;
+
+static NSString *RDAdblockConfigPath(void) {
+    return [RDDataDir() stringByAppendingPathComponent:@"adblock.json"];
+}
+
+static void RDAdLoadExtraPrefix(void) {
+    pthread_mutex_lock(&gAdExtraLock);
+    gAdExtraPrefix = [NSMutableArray array];
+    NSData *d = [NSData dataWithContentsOfFile:RDAdblockConfigPath()];
+    if (d.length) {
+        id obj = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+        if ([obj isKindOfClass:[NSArray class]]) {
+            for (id x in obj) {
+                if ([x isKindOfClass:[NSString class]] && [(NSString *)x length]) {
+                    [gAdExtraPrefix addObject:x];
+                }
+            }
+        }
+    }
+    pthread_mutex_unlock(&gAdExtraLock);
+}
+
+NSArray *RDAdExtraList(void) {
+    pthread_mutex_lock(&gAdExtraLock);
+    NSArray *a = [gAdExtraPrefix copy] ?: @[];
+    pthread_mutex_unlock(&gAdExtraLock);
+    return a;
+}
+
+void RDAdExtraAdd(NSString *prefix) {
+    if (!prefix.length) return;
+    pthread_mutex_lock(&gAdExtraLock);
+    if (!gAdExtraPrefix) gAdExtraPrefix = [NSMutableArray array];
+    BOOL exists = NO;
+    for (NSString *x in gAdExtraPrefix) if ([x isEqualToString:prefix]) { exists = YES; break; }
+    if (!exists) [gAdExtraPrefix addObject:prefix];
+    NSArray *snap = [gAdExtraPrefix copy];
+    pthread_mutex_unlock(&gAdExtraLock);
+    NSData *d = [NSJSONSerialization dataWithJSONObject:snap options:0 error:nil];
+    if (d) [d writeToFile:RDAdblockConfigPath() atomically:YES];
+    RDLogAppend([NSString stringWithFormat:@"[AD] 额外前缀 +%@", prefix]);
+}
+
+void RDAdExtraRemove(NSString *prefix) {
+    pthread_mutex_lock(&gAdExtraLock);
+    [gAdExtraPrefix removeObject:prefix];
+    NSArray *snap = [gAdExtraPrefix copy];
+    pthread_mutex_unlock(&gAdExtraLock);
+    NSData *d = [NSJSONSerialization dataWithJSONObject:snap options:0 error:nil];
+    if (d) [d writeToFile:RDAdblockConfigPath() atomically:YES];
+}
 // 二次确认关键词（防止 BU→BufferLayer 这类误伤）
 static const char *kAdWord[] = {
     "Ad", "Banner", "Interstitial", "Rewarded", "Splash", "Native",
@@ -512,6 +567,15 @@ static BOOL RDIsAdClassName(const char *cn) {
     for (size_t i = 0; i < np; i++) {
         const char *p = kAdPrefix[i];
         if (strncmp(cn, p, strlen(p)) == 0) { prefixHit = YES; break; }
+    }
+    if (!prefixHit) {
+        // 热更前缀
+        pthread_mutex_lock(&gAdExtraLock);
+        for (NSString *p in gAdExtraPrefix) {
+            const char *pc = [p UTF8String];
+            if (pc && strncmp(cn, pc, strlen(pc)) == 0) { prefixHit = YES; break; }
+        }
+        pthread_mutex_unlock(&gAdExtraLock);
     }
     if (!prefixHit) return NO;
 
@@ -552,6 +616,7 @@ void RDInstallAdHook(void) {
     if (imp) {
         class_replaceMethod(cls, sel, imp, types);
         gAdHookInstalled = YES;
+        RDAdLoadExtraPrefix();
         RDLogAppend(@"[AD] UIView addSubview: 钩子已装");
     }
 }

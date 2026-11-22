@@ -116,6 +116,9 @@ BOOL RDGuardsActive(void);
 
 void RDAdBlockSet(BOOL on);
 void RDInstallAdHook(void);
+void RDAdExtraAdd(NSString *prefix);
+void RDAdExtraRemove(NSString *prefix);
+NSArray *RDAdExtraList(void);
 BOOL RDAdBlockOn(void);
 NSArray *RDAdBlockLog(void);
 BOOL RDToolPersist(void);

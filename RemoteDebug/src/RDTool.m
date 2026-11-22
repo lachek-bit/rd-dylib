@@ -526,6 +526,26 @@ static void RDToolRegisterUIGroup(void) {
             return @{@"ok": @(ok)};
         });
 
+    RDRegisterTool(@"ad.extra.add", @"添加广告前缀（热更）",
+        @"遇到新广告 SDK 时加类名前缀，重启生效，不用换 dylib",
+        @[P(@"prefix", @"string", YES, @"类名前缀，如 XiaoCanAd")], @"系统", ^id(NSDictionary *a) {
+            NSString *p = RDArgStr(a, @"prefix", nil);
+            if (!p.length) return @{@"ok": @NO, @"error": @"缺少 prefix"};
+            RDAdExtraAdd(p);
+            return @{@"ok": @YES, @"extra": RDAdExtraList()};
+        });
+
+    RDRegisterTool(@"ad.extra.list", @"额外前缀列表",
+        @"", @[], @"系统", ^id(NSDictionary *a) {
+            return @{@"ok": @YES, @"extra": RDAdExtraList()};
+        });
+
+    RDRegisterTool(@"ad.extra.remove", @"移除额外前缀",
+        @"", @[P(@"prefix", @"string", YES, @"")], @"系统", ^id(NSDictionary *a) {
+            RDAdExtraRemove(RDArgStr(a, @"prefix", nil));
+            return @{@"ok": @YES, @"extra": RDAdExtraList()};
+        });
+
     RDRegisterTool(@"ad.block", @"拦截广告视图",
         @"开启后，类名符合广告 SDK 特征的视图不会被加进界面",
         @[P(@"on", @"bool", NO, @"默认 true，传 false 关闭")], @"系统", ^id(NSDictionary *a) {
