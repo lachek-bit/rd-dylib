@@ -99,6 +99,7 @@ curl -s -X POST --data-binary @/tmp/js.txt http://10.4.37.156:8899/api/eval
 | `docs/03-踩坑记录.md` | **动手前必读** —— 15 个坑，每个都能让你卡半天 |
 | `docs/04-当前进度-Grow.md` | 接着调 Grow，看这里接着做 |
 | `docs/05-复刻与出包.md` | 换机器、重建仓库、改编译参数 |
+| `docs/06-越狱tweak逆向.md` | 分析越狱 tweak（GrowCrack）的完整记录 |
 
 ---
 

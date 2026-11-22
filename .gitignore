@@ -2,3 +2,7 @@
 .workbuddy/
 .DS_Store
 *.json.bak
+jb/
+grow/
+*.deb
+_ka.md
