@@ -1326,6 +1326,9 @@ static void RDConstructor(void) {
         // 否则它已经把 premium 改回 false 了
         RDLoadGuards();
 
+        // 广告拦截钩子：如果 adblock.json 里 on=true，会自动开始拦
+        RDInstallAdHook();
+
         // 等 app 起来再开服务（UIKit / 网络栈就绪）
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
