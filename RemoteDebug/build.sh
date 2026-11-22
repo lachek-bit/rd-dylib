@@ -33,7 +33,7 @@ xcrun --sdk iphoneos clang \
   -framework CoreFoundation \
   -o "$OUT/RemoteDebug.dylib" \
   src/RemoteDebug.m src/RDIndexHTML.m src/RDHook.m \
-  src/RDAutomation.m src/RDTool.m
+  src/RDAutomation.m src/RDTool.m src/RDFloat.m
 
 if command -v ldid >/dev/null 2>&1; then
   ldid -S "$OUT/RemoteDebug.dylib"

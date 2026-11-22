@@ -40,7 +40,7 @@ jobs:
             -framework CoreFoundation \
             -o build/RemoteDebug.dylib \
             RemoteDebug/src/RemoteDebug.m RemoteDebug/src/RDIndexHTML.m RemoteDebug/src/RDHook.m \
-            RemoteDebug/src/RDAutomation.m RemoteDebug/src/RDTool.m
+            RemoteDebug/src/RDAutomation.m RemoteDebug/src/RDTool.m RemoteDebug/src/RDFloat.m
 
       - name: Sign with ldid
         run: |

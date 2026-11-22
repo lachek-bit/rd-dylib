@@ -1040,6 +1040,7 @@ static void RDHandleConnection(int fd) {
 static int gPort = 0;
 
 static int RDCurrentPort(void) { return gPort; }
+int RDCurrentPortPub(void) { return gPort; }
 
 static int RDBindPort(int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -1087,6 +1088,12 @@ static void RDStartServer(void) {
 
     RDLogAppend([NSString stringWithFormat:
         @"[RemoteDebug] 已启动  http://<本机局域网IP>:%d/   pid=%d", port, getpid()]);
+
+    // 悬浮球等界面稳定后再挂上去
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        RDInstallFloatButton();
+    });
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         for (;;) {

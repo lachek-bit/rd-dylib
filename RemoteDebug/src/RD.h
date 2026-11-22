@@ -26,6 +26,12 @@ NSData *RDScreenshotJPEG(CGFloat quality);
 
 NSString *RDIndexHTML(void);
 
+#pragma mark - 悬浮球
+
+void RDInstallFloatButton(void);
+NSString *RDLocalIP(void);
+int RDCurrentPortPub(void);
+
 #pragma mark - 动态 hook
 
 // mode: log | skip | force | after

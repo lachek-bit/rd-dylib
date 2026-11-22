@@ -1,7 +1,7 @@
 # 仅用于 macOS（有 Xcode 时）。Windows 请用 GitHub Actions 或在线 CI。
 SDK := $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
 
-SRC := src/RemoteDebug.m src/RDIndexHTML.m src/RDHook.m src/RDAutomation.m src/RDTool.m
+SRC := src/RemoteDebug.m src/RDIndexHTML.m src/RDHook.m src/RDAutomation.m src/RDTool.m src/RDFloat.m
 OUT := build/RemoteDebug.dylib
 
 all: $(OUT)
