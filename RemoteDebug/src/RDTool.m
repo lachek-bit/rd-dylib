@@ -442,6 +442,18 @@ static void RDToolRegisterUIGroup(void) {
         });
 
     // ---------- 系统 ----------
+    RDRegisterTool(@"app.paths", @"数据目录",
+        @"日志/配置的真实路径，排查用",
+        @[], @"看", ^id(NSDictionary *a) {
+            NSBundle *b = [NSBundle mainBundle];
+            return @{
+                @"data_dir": RDDataDir() ?: @"",
+                @"home": NSHomeDirectory() ?: @"",
+                @"bundle": [b bundlePath] ?: @"",
+                @"port": @(RDCurrentPortPub())
+            };
+        });
+
     RDRegisterTool(@"device.vibrate", @"震动",
         @"来一下震动反馈",
         @[], @"系统", ^id(NSDictionary *a) {

@@ -294,11 +294,15 @@ static JSContext *gJS = nil;
 static NSString *gJSLastError = nil;
 
 static NSArray<NSString *> *RDAllClassNames(void) {
-    int n = objc_getClassList(NULL, 0);
-    if (n <= 0) return @[];
-    Class *buf = (Class *)malloc(sizeof(Class) * (size_t)n);
+    int cap = objc_getClassList(NULL, 0);
+    if (cap <= 0) return @[];
+    Class *buf = (Class *)malloc(sizeof(Class) * (size_t)cap);
     if (!buf) return @[];
-    n = objc_getClassList(buf, n);
+
+    // 注意：第二次调用返回的是"当前真实类总数"，可能比 cap 大（运行时还会生成类）。
+    // 必须夹到 cap，否则 buf[i] 越界读，直接堆崩 —— 这就是 /api/classes 必崩的根因。
+    int n = objc_getClassList(buf, cap);
+    if (n > cap) n = cap;
     if (n <= 0) { free(buf); return @[]; }
 
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
@@ -899,11 +903,29 @@ static RDResp *RDHandle(NSString *method, NSString *path, NSDictionary *q, NSDat
         if (!dom.length) dom = q[@"domain"];
         NSUserDefaults *ud = dom.length ? [[NSUserDefaults alloc] initWithSuiteName:dom]
                                         : [NSUserDefaults standardUserDefaults];
-        NSDictionary *d = [ud dictionaryRepresentation] ?: @{};
-        // 里面常混着 NSData，dataWithJSONObject 遇到会直接抛异常而不是返回 nil
+        NSDictionary *raw = [ud dictionaryRepresentation] ?: @{};
+        // UserDefaults 里常混着 NSData（token、缓存），直接序列化会抛异常。
+        // 把不可序列化的值换成一句说明，保证整体能返回结构化 JSON。
+        NSMutableDictionary *clean = [NSMutableDictionary dictionaryWithCapacity:raw.count];
+        for (id k in raw) {
+            id v = raw[k];
+            if ([v isKindOfClass:[NSData class]]) {
+                clean[k] = [NSString stringWithFormat:@"<data %lu bytes>",
+                            (unsigned long)[(NSData *)v length]];
+            } else if ([v isKindOfClass:[NSDate class]]) {
+                clean[k] = [NSString stringWithFormat:@"<date %.0f>", [(NSDate *)v timeIntervalSince1970]];
+            } else if ([v isKindOfClass:[NSNumber class]] ||
+                       [v isKindOfClass:[NSString class]] ||
+                       [v isKindOfClass:[NSArray class]] ||
+                       [v isKindOfClass:[NSDictionary class]]) {
+                clean[k] = v;
+            } else if (v) {
+                clean[k] = [v description];
+            }
+        }
         @try {
             NSError *e = nil;
-            NSData *jd = [NSJSONSerialization dataWithJSONObject:d options:0 error:&e];
+            NSData *jd = [NSJSONSerialization dataWithJSONObject:clean options:0 error:&e];
             if (jd) {
                 RDResp *r = [RDResp new];
                 r.status = 200;
@@ -914,7 +936,7 @@ static RDResp *RDHandle(NSString *method, NSString *path, NSDictionary *q, NSDat
         } @catch (NSException *ex) {
             (void)ex;
         }
-        return [RDResp text:[d description] status:200];
+        return [RDResp text:[clean description] status:200];
     }
 
     // ---- 沙盒内写文件（方便推配置/脚本进去）

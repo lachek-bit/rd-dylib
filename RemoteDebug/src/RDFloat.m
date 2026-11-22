@@ -173,8 +173,12 @@ static void RDFloatLongPress(void) {
         [[NSUserDefaults standardUserDefaults] setDouble:sx forKey:kRDFloatX];
         [[NSUserDefaults standardUserDefaults] setDouble:sy forKey:kRDFloatY];
 
-        if (fabs(t.x) < 9 && fabs(t.y) < 9) RDFloatTap();
+        // 点击交给 UITapGestureRecognizer，这里只管拖动
     }
+}
+
+- (void)onTap:(UITapGestureRecognizer *)g {
+    if (g.state == UIGestureRecognizerStateEnded) RDFloatTap();
 }
 
 - (void)onLongPress:(UILongPressGestureRecognizer *)g {
@@ -242,9 +246,18 @@ void RDInstallFloatButton(void) {
             [btn addSubview:l];
         }
 
+        // 关键：pan 有 ~10pt 移动阈值，纯点击永远不会触发，
+        // 必须单独挂一个 tap，否则点一下毫无反应
+        UITapGestureRecognizer *tap =
+            [[UITapGestureRecognizer alloc] initWithTarget:[RDFloatController shared]
+                                                    action:@selector(onTap:)];
+        tap.numberOfTapsRequired = 1;
+        [btn addGestureRecognizer:tap];
+
         UIPanGestureRecognizer *pan =
             [[UIPanGestureRecognizer alloc] initWithTarget:[RDFloatController shared]
                                                     action:@selector(onPan:)];
+        [pan requireGestureRecognizerToFail:tap];
         [btn addGestureRecognizer:pan];
 
         UILongPressGestureRecognizer *lp =
