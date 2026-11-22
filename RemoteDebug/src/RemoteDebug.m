@@ -822,6 +822,53 @@ static RDResp *RDHandle(NSString *method, NSString *path, NSDictionary *q, NSDat
         return [RDResp json:@{@"ok": @YES, @"count": @(items.count), @"items": items}];
     }
 
+    // ---- 热更新：上传新 dylib 到沙盒 stage 目录
+    if ([path isEqualToString:@"/api/deploy"]) {
+        if (!body.length) return [RDResp json:@{@"ok": @NO, @"error": @"空 body"}];
+
+        NSString *dir = [RDDataDir() stringByAppendingPathComponent:@"stage"];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *tmp = [dir stringByAppendingPathComponent:@"RemoteDebug.dylib.tmp"];
+        NSString *dst = [dir stringByAppendingPathComponent:@"RemoteDebug.dylib"];
+
+        NSError *e = nil;
+        if (![body writeToFile:tmp options:NSDataWritingAtomic error:&e]) {
+            return [RDResp json:@{@"ok": @NO,
+                                  @"error": e.localizedDescription ?: @"写入失败"}];
+        }
+        [fm removeItemAtPath:dst error:nil];
+        if (![fm moveItemAtPath:tmp toPath:dst error:&e]) {
+            return [RDResp json:@{@"ok": @NO,
+                                  @"error": e.localizedDescription ?: @"重命名失败"}];
+        }
+        // 新的 stage 就位，清掉上次的失败标记
+        [fm removeItemAtPath:[dir stringByAppendingPathComponent:@"failed"] error:nil];
+
+        RDLogAppend([NSString stringWithFormat:@"[DEPLOY] 已收到新 dylib %lu 字节 -> %@",
+                     (unsigned long)body.length, dst]);
+        return [RDResp json:@{@"ok": @YES,
+                              @"size": @(body.length),
+                              @"path": dst,
+                              @"hint": @"调用 deploy.test 验证能否加载"}];
+    }
+
+    if ([path isEqualToString:@"/api/deploy/status"]) {
+        NSString *dir = [RDDataDir() stringByAppendingPathComponent:@"stage"];
+        NSString *dst = [dir stringByAppendingPathComponent:@"RemoteDebug.dylib"];
+        NSDictionary *attrs = [[NSFileManager defaultManager]
+                               attributesOfItemAtPath:dst error:nil];
+        BOOL staged = (attrs != nil);
+        BOOL failed = [[NSFileManager defaultManager]
+                       fileExistsAtPath:[dir stringByAppendingPathComponent:@"failed"]];
+        return [RDResp json:@{@"ok": @YES,
+                              @"staged": @(staged),
+                              @"size": attrs[NSFileSize] ?: @0,
+                              @"mtime": attrs[NSFileModificationDate] ? @([attrs[NSFileModificationDate] timeIntervalSince1970]) : @0,
+                              @"last_failed": @(failed),
+                              @"dir": dir ?: @""}];
+    }
+
     // ---- 工具：列表 / 调用 / 注册 / 删除
     if ([path isEqualToString:@"/api/tools"]) {
         return [RDResp json:@{@"ok": @YES, @"tools": RDToolList()}];
@@ -1228,6 +1275,10 @@ static void RDInstallCrashHandler(void) {
 __attribute__((constructor))
 static void RDConstructor(void) {
     @autoreleasepool {
+        // 被 dlopen 热加载进来的副本：只加载，不做任何初始化，
+        // 否则会和已经在跑的旧版本抢端口、重复接管 stderr
+        if (getenv("RD_STAGED")) return;
+
         // 立刻接管 stderr，越早越好
         RDStartStderrCapture();
         RDInstallCrashHandler();

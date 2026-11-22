@@ -12,6 +12,7 @@
 #import <AudioToolbox/AudioToolbox.h>
 #import <pthread.h>
 #import <stdlib.h>
+#import <dlfcn.h>
 
 @interface UIView (RDFindFirstResponder)
 - (UIView *)findFirstResponder;
@@ -506,6 +507,39 @@ static void RDToolRegisterUIGroup(void) {
                 return (id)nil;
             });
             return @{@"ok": @(ok)};
+        });
+
+    RDRegisterTool(@"deploy.test", @"测试热加载",
+        @"尝试 dlopen 沙盒里的新 dylib，验证这条路是否可行",
+        @[], @"系统", ^id(NSDictionary *a) {
+            NSString *dir = [RDDataDir() stringByAppendingPathComponent:@"stage"];
+            NSString *p = [dir stringByAppendingPathComponent:@"RemoteDebug.dylib"];
+            NSFileManager *fm = [NSFileManager defaultManager];
+            if (![fm fileExistsAtPath:p]) {
+                return @{@"ok": @NO, @"error": @"没有 stage 文件，先 POST /api/deploy"};
+            }
+
+            // 告诉被加载的副本"你是热加载的，别初始化"
+            setenv("RD_STAGED", "1", 1);
+            dlerror();
+            void *h = dlopen([p fileSystemRepresentation], RTLD_NOW | RTLD_LOCAL);
+            const char *err = dlerror();
+            unsetenv("RD_STAGED");
+
+            if (!h) {
+                [fm removeItemAtPath:p error:nil];
+                NSString *m = err ? @(err) : @"dlopen 失败";
+                [fm createFileAtPath:[dir stringByAppendingPathComponent:@"failed"]
+                            contents:[m dataUsingEncoding:NSUTF8StringEncoding]
+                          attributes:nil];
+                RDLogAppend([NSString stringWithFormat:@"[DEPLOY] dlopen 失败: %@", m]);
+                return @{@"ok": @NO, @"error": m};
+            }
+
+            RDLogAppend(@"[DEPLOY] dlopen 成功，热加载可行");
+            return @{@"ok": @YES,
+                     @"handle": [NSString stringWithFormat:@"0x%lx", (unsigned long)h],
+                     @"note": @"能加载，但同名 ObjC 类会冲突，真正接管还需改造"};
         });
 
     RDRegisterTool(@"app.restart", @"重启 app",
