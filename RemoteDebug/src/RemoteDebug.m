@@ -294,23 +294,37 @@ static JSContext *gJS = nil;
 static NSString *gJSLastError = nil;
 
 static NSArray<NSString *> *RDAllClassNames(void) {
-    int cap = objc_getClassList(NULL, 0);
-    if (cap <= 0) return @[];
-    Class *buf = (Class *)malloc(sizeof(Class) * (size_t)cap);
-    if (!buf) return @[];
+    // 不要用 objc_getClassList 的「两次调用」模式。
+    // crash.log 实测：SIGSEGV addr=0x0 死在 objc_getClassList+80，
+    // 第二次调用返回的是当前真实总数（运行时还会动态生成类），和 buffer 容量对不上，
+    // 而且在 Swift app 里它内部偶发空指针。
+    // objc_copyClassList 一次返回完整快照，内存自己 free，稳得多。
+    static pthread_mutex_t cacheLock = PTHREAD_MUTEX_INITIALIZER;
+    static NSArray *cache = nil;
+    static NSTimeInterval cacheAt = 0;
 
-    // 注意：第二次调用返回的是"当前真实类总数"，可能比 cap 大（运行时还会生成类）。
-    // 必须夹到 cap，否则 buf[i] 越界读，直接堆崩 —— 这就是 /api/classes 必崩的根因。
-    int n = objc_getClassList(buf, cap);
-    if (n > cap) n = cap;
-    if (n <= 0) { free(buf); return @[]; }
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    pthread_mutex_lock(&cacheLock);
+    if (cache && now - cacheAt < 10.0) {
+        NSArray *hit = cache;
+        pthread_mutex_unlock(&cacheLock);
+        return hit;
+    }
+    pthread_mutex_unlock(&cacheLock);
 
-    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
-    for (int i = 0; i < n; i++) {
-        const char *s = class_getName(buf[i]);
+    unsigned int count = 0;
+    Class *classes = objc_copyClassList(&count);
+    if (!classes || count == 0) {
+        if (classes) free(classes);
+        return @[];
+    }
+
+    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:count];
+    for (unsigned int i = 0; i < count; i++) {
+        Class c = classes[i];
+        if (!c) continue;
+        const char *s = class_getName(c);
         if (!s) continue;
-        // 关键：@(s) 遇到非法 UTF-8 会返回 nil，addObject:nil 直接抛异常，
-        // 之前 /api/classes 连续调用把 app 打崩就死在这
         @try {
             NSString *name = [NSString stringWithUTF8String:s];
             if (!name) {
@@ -323,7 +337,12 @@ static NSArray<NSString *> *RDAllClassNames(void) {
             (void)e;
         }
     }
-    free(buf);
+    free(classes);
+
+    pthread_mutex_lock(&cacheLock);
+    cache = arr;
+    cacheAt = now;
+    pthread_mutex_unlock(&cacheLock);
     return arr;
 }
 
