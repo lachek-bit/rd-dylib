@@ -494,12 +494,14 @@ static const char *kAdPrefix[] = {
     "BU", "CSJ", "Pangle", "GDT", "KSAd", "KSFeed", "KSInterstitial",
     "MTG", "Mintegral", "Sigmob", "SIG", "GAD", "ATAggregated",
     "QMRewarded", "QMInterstitial", "QMBanner", "Gromore", "ABU",
-    "CSJMediation", "BaiduMobAd", "WMAd", "QMU"
+    "CSJMediation", "BaiduMobAd", "WMAd", "QMU",
+    // 小蚕实测：WindMill（风车聚合）+ 自家容器 XiaoCanAd
+    "XiaoCanAd", "XiaoCan", "WindMill"
 };
 // 二次确认关键词（防止 BU→BufferLayer 这类误伤）
 static const char *kAdWord[] = {
     "Ad", "Banner", "Interstitial", "Rewarded", "Splash", "Native",
-    "Feed", "AdView", "AdManager", "AdSDK"
+    "Feed", "AdView", "AdManager", "AdSDK", "NativeAd", "AdNative"
 };
 
 static BOOL RDIsAdClassName(const char *cn) {
