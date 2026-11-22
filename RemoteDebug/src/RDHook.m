@@ -629,7 +629,13 @@ void RDInstallAdHook(void) {
                     [gAdBlockLog addObject:@(cn)];
                 }
                 pthread_mutex_unlock(&gAdLock);
-                return;   // 丢弃这个广告视图
+                // 不丢弃，改隐藏 —— 广告是 Flutter PlatformView 嵌进来的，
+                // 直接抽掉会让引擎状态错乱、导致闪退。隐藏则视图还在，只是看不见。
+                @try {
+                    if ([child respondsToSelector:@selector(setHidden:)]) {
+                        [child setHidden:YES];
+                    }
+                } @catch (NSException *e) { (void)e; }
             }
         }
         if (orig) ((void (*)(id, SEL, id))orig)(self, sel, child);
