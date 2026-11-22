@@ -455,6 +455,105 @@ void RDHookLoadPersisted(void) {
 
 
 
+
+#pragma mark - 广告拦截（视图层）
+
+// 广告最终都要 addSubview 到界面上，在视图层拦截最通用 ——
+// 不用逐个 SDK 找加载方法，也不用管是穿山甲、优量汇还是快手。
+// 默认关闭，用 ad.block 开启，避免平时给所有 addSubview 增加开销。
+
+static BOOL gAdBlockOn = NO;
+static NSMutableArray<NSString *> *gAdBlockLog = nil;
+static pthread_mutex_t gAdLock = PTHREAD_MUTEX_INITIALIZER;
+static BOOL gAdHookInstalled = NO;
+
+BOOL RDAdBlockOn(void) {
+    pthread_mutex_lock(&gAdLock);
+    BOOL v = gAdBlockOn;
+    pthread_mutex_unlock(&gAdLock);
+    return v;
+}
+
+NSArray *RDAdBlockLog(void) {
+    pthread_mutex_lock(&gAdLock);
+    NSArray *a = [gAdBlockLog copy] ?: @[];
+    pthread_mutex_unlock(&gAdLock);
+    return a;
+}
+
+void RDAdBlockSet(BOOL on) {
+    pthread_mutex_lock(&gAdLock);
+    gAdBlockOn = on;
+    if (on && !gAdBlockLog) gAdBlockLog = [NSMutableArray array];
+    pthread_mutex_unlock(&gAdLock);
+    RDLogAppend([NSString stringWithFormat:@"[AD] 拦截 %@", on ? @"开启" : @"关闭"]);
+}
+
+// SDK 类名前缀（国内常见聚合广告）
+static const char *kAdPrefix[] = {
+    "BU", "CSJ", "Pangle", "GDT", "KSAd", "KSFeed", "KSInterstitial",
+    "MTG", "Mintegral", "Sigmob", "SIG", "GAD", "ATAggregated",
+    "QMRewarded", "QMInterstitial", "QMBanner", "Gromore", "ABU",
+    "CSJMediation", "BaiduMobAd", "WMAd", "QMU"
+};
+// 二次确认关键词（防止 BU→BufferLayer 这类误伤）
+static const char *kAdWord[] = {
+    "Ad", "Banner", "Interstitial", "Rewarded", "Splash", "Native",
+    "Feed", "AdView", "AdManager", "AdSDK"
+};
+
+static BOOL RDIsAdClassName(const char *cn) {
+    if (!cn || !*cn) return NO;
+
+    BOOL prefixHit = NO;
+    size_t np = sizeof(kAdPrefix) / sizeof(kAdPrefix[0]);
+    for (size_t i = 0; i < np; i++) {
+        const char *p = kAdPrefix[i];
+        if (strncmp(cn, p, strlen(p)) == 0) { prefixHit = YES; break; }
+    }
+    if (!prefixHit) return NO;
+
+    size_t nw = sizeof(kAdWord) / sizeof(kAdWord[0]);
+    for (size_t i = 0; i < nw; i++) {
+        if (strstr(cn, kAdWord[i])) return YES;
+    }
+    // 前缀命中但没关键词，只有明确是 SDK 主类时才拦
+    if (strstr(cn, "SDK") || strstr(cn, "Pangle")) return YES;
+    return NO;
+}
+
+void RDInstallAdHook(void) {
+    if (gAdHookInstalled) return;
+    Class cls = objc_getClass("UIView");
+    if (!cls) return;
+    SEL sel = @selector(addSubview:);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return;
+    IMP orig = method_getImplementation(m);
+    const char *types = method_getTypeEncoding(m);
+
+    id blk = ^void(id self, id child) {
+        if (gAdBlockOn && child) {
+            const char *cn = object_getClassName(child);
+            if (RDIsAdClassName(cn)) {
+                pthread_mutex_lock(&gAdLock);
+                if (gAdBlockLog.count < 200) {
+                    [gAdBlockLog addObject:@(cn)];
+                }
+                pthread_mutex_unlock(&gAdLock);
+                return;   // 丢弃这个广告视图
+            }
+        }
+        if (orig) ((void (*)(id, SEL, id))orig)(self, sel, child);
+    };
+    IMP imp = imp_implementationWithBlock(blk);
+    if (imp) {
+        class_replaceMethod(cls, sel, imp, types);
+        gAdHookInstalled = YES;
+        RDLogAppend(@"[AD] UIView addSubview: 钩子已装");
+    }
+}
+
 #pragma mark - UserDefaults 写入保护
 
 // 思路：不拦读取（高频、递归风险大、两次崩），只拦写入。

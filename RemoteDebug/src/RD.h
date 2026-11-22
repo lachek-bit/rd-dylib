@@ -111,6 +111,13 @@ void RDGuardRemove(NSString *key);
 NSArray *RDGuardList(void);
 void RDLoadGuards(void);
 BOOL RDGuardsActive(void);
+
+#pragma mark - 广告拦截
+
+void RDAdBlockSet(BOOL on);
+void RDInstallAdHook(void);
+BOOL RDAdBlockOn(void);
+NSArray *RDAdBlockLog(void);
 BOOL RDToolPersist(void);
 BOOL RDToolIsBuiltin(NSString *name);
 

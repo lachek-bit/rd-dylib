@@ -526,6 +526,25 @@ static void RDToolRegisterUIGroup(void) {
             return @{@"ok": @(ok)};
         });
 
+    RDRegisterTool(@"ad.block", @"拦截广告视图",
+        @"开启后，类名符合广告 SDK 特征的视图不会被加进界面",
+        @[P(@"on", @"bool", NO, @"默认 true，传 false 关闭")], @"系统", ^id(NSDictionary *a) {
+            BOOL on = RDArgBool(a, @"on", YES);
+            RDInstallAdHook();
+            RDAdBlockSet(on);
+            return @{@"ok": @YES, @"blocking": @(RDAdBlockOn())};
+        });
+
+    RDRegisterTool(@"ad.log", @"被拦的广告视图",
+        @"看拦截了哪些类，用来调优匹配规则",
+        @[], @"系统", ^id(NSDictionary *a) {
+            NSArray *l = RDAdBlockLog();
+            NSMutableDictionary *cnt = [NSMutableDictionary dictionary];
+            for (NSString *c in l) cnt[c] = @([cnt[c] integerValue] + 1);
+            return @{@"ok": @YES, @"blocking": @(RDAdBlockOn()),
+                     @"total": @(l.count), @"byClass": cnt};
+        });
+
     RDRegisterTool(@"guard.add", @"禁止覆盖某个 key",
         @"拦截 UserDefaults 写入，让指定 key 的值不被 app 改回去",
         @[P(@"key", @"string", YES, @"例如 premium")], @"系统", ^id(NSDictionary *a) {
