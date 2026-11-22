@@ -738,8 +738,11 @@ static RDResp *RDHandle(NSString *method, NSString *path, NSDictionary *q, NSDat
         }
         NSString *err = nil;
         BOOL ok = RDHookInstall(cls, sel, q[@"mode"], RDParseValue(q[@"value"]), &err);
-        if (ok) RDHookPersist();
-        return [RDResp json:@{@"ok": @(ok), @"error": err ?: @"", @"saved": @(ok)}];
+        // 默认不落盘：调试期的 hook 重启即失效，避免把自己锁死在崩溃循环里。
+        // 需要长期生效再加 persist=1
+        BOOL persist = (q[@"persist"] != nil);
+        if (ok && persist) RDHookPersist();
+        return [RDResp json:@{@"ok": @(ok), @"error": err ?: @"", @"saved": @(persist)}];
     }
 
     if ([path isEqualToString:@"/api/unhook"]) {
@@ -897,17 +900,21 @@ static RDResp *RDHandle(NSString *method, NSString *path, NSDictionary *q, NSDat
         NSUserDefaults *ud = dom.length ? [[NSUserDefaults alloc] initWithSuiteName:dom]
                                         : [NSUserDefaults standardUserDefaults];
         NSDictionary *d = [ud dictionaryRepresentation] ?: @{};
-        NSError *e = nil;
-        NSData *jd = [NSJSONSerialization dataWithJSONObject:d options:0 error:&e];
-        if (!jd) {
-            // 含非 JSON 类型，退化成 description
-            return [RDResp text:[d description] status:200];
+        // 里面常混着 NSData，dataWithJSONObject 遇到会直接抛异常而不是返回 nil
+        @try {
+            NSError *e = nil;
+            NSData *jd = [NSJSONSerialization dataWithJSONObject:d options:0 error:&e];
+            if (jd) {
+                RDResp *r = [RDResp new];
+                r.status = 200;
+                r.ctype = @"application/json; charset=utf-8";
+                r.body = jd;
+                return r;
+            }
+        } @catch (NSException *ex) {
+            (void)ex;
         }
-        RDResp *r = [RDResp new];
-        r.status = 200;
-        r.ctype = @"application/json; charset=utf-8";
-        r.body = jd;
-        return r;
+        return [RDResp text:[d description] status:200];
     }
 
     // ---- 沙盒内写文件（方便推配置/脚本进去）
@@ -1166,6 +1173,7 @@ static void RDConstructor(void) {
         // 立刻接管 stderr，越早越好
         RDStartStderrCapture();
         RDInstallCrashHandler();
+        RDBootCheck();
         RDLogAppend(@"[RemoteDebug] dylib 已加载");
 
         // 等 app 起来再开服务（UIKit / 网络栈就绪）

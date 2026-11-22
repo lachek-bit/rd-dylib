@@ -38,6 +38,8 @@ BOOL RDHookInstall(NSString *clsName, NSString *selName, NSString *mode,
 BOOL RDHookRemove(NSString *clsName, NSString *selName);
 NSArray *RDHookList(void);
 void RDHookLoadPersisted(void);
+BOOL RDBootCheck(void);
+extern BOOL gRDCrashLoop;
 BOOL RDHookPersist(void);
 void RDHookResetAll(void);
 

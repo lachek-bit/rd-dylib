@@ -340,6 +340,7 @@ BOOL RDHookPersist(void) {
     for (NSString *k in gRules) {
         RDHookRule *r = gRules[k];
         NSMutableDictionary *d = [@{
+            @"v": @2,
             @"cls": r.clsName ?: @"",
             @"sel": r.selName ?: @"",
             @"mode": r.mode ?: @"log"
@@ -360,7 +361,43 @@ BOOL RDHookPersist(void) {
     return [jd writeToFile:RDHooksPath() atomically:YES];
 }
 
+BOOL gRDCrashLoop = NO;
+
+// 启动时打一个 booting 标记，20 秒后自动清掉。
+// 下次启动如果发现标记还在，说明上次启动后 20 秒内就死了 —— 判定为崩溃循环，
+// 本次跳过 hook 恢复，保证 app 能起来。
+BOOL RDBootCheck(void) {
+    static BOOL done = NO;
+    if (done) return gRDCrashLoop;
+    done = YES;
+
+    @try {
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSString *mark = [RDDataDir() stringByAppendingPathComponent:@"booting"];
+        gRDCrashLoop = [fm fileExistsAtPath:mark];
+        [[NSData data] writeToFile:mark atomically:YES];
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20 * NSEC_PER_SEC)),
+                       dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [fm removeItemAtPath:mark error:nil];
+        });
+    } @catch (NSException *e) {
+        (void)e;
+    }
+    return gRDCrashLoop;
+}
+
 void RDHookLoadPersisted(void) {
+    if (gRDCrashLoop) {
+        // 上次启动 20 秒内就崩了，大概率是 hook 规则把 app 打死的。
+        // 把 hooks.json 挪到 .bad 备份，保证这次能正常起来。
+        NSString *bad = [[RDHooksPath() stringByAppendingString:@".bad"] copy];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        [fm removeItemAtPath:bad error:nil];
+        [fm moveItemAtPath:RDHooksPath() toPath:bad error:nil];
+        RDLogAppend(@"[HOOK] 检测到崩溃循环，hooks.json 已移到 hooks.json.bad，跳过恢复");
+        return;
+    }
     NSString *path = RDHooksPath();
     NSData *d = [NSData dataWithContentsOfFile:path];
     if (!d.length) return;
@@ -371,6 +408,8 @@ void RDHookLoadPersisted(void) {
     NSUInteger ok = 0;
     for (NSDictionary *item in arr) {
         if (![item isKindOfClass:[NSDictionary class]]) continue;
+        // 旧版（没有 v=2）的规则一律不加载，避免历史遗留把 app 打崩
+        if (![item[@"v"] isEqual:@2]) continue;
         NSString *cls = item[@"cls"], *sel = item[@"sel"], *mode = item[@"mode"];
         id value = item[@"value"];
         NSString *err = nil;
