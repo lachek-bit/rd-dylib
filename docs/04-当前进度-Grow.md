@@ -218,3 +218,78 @@ curl -s 'http://IP:8899/api/tool?name=hid.tap&x=353&y=810&scale=3'
 curl -s 'http://IP:8899/api/tool?name=hid.tap&x=353&y=810&scale=1&integrated=true'
 # 每次点完看 /api/ui?vc=1 是否切到洞悉
 ```
+
+---
+
+## 会员解锁探索记录（2026-11-22 14:20-14:45）
+
+### 已确认的事实
+
+**1. 真实的会员字段有两个，都不是布尔值**
+
+| key | 类型 | 内容 |
+|---|---|---|
+| `premium` | **NSString（JSON）** | `{"isSandbox":false,"isActive":false,"periodType":0,"productIdentifier":"","willRenew":false,...}` |
+| `userDetail` | **NSData（JSON）** | `{"vip":false,"vipLevel":0,"uid":...,"nick":"夏天666",...}` |
+
+⚠️ `_rd.inst(u,'boolForKey:',['premium'])` 永远返回 false —— 因为对字符串调 boolForKey
+不是"非空即真"，别被这个骗了。要读就得 `objectForKey:` 再解析。
+
+**2. 两者都是"结果"，不是"开关"**
+
+- `userDetail.vip` 改成 true 后**能保持**（重启不回滚），但 UI 不认它
+- `premium` 改成 `isActive:true` 后**每次启动被覆盖回 false**（StoreKit 收据校验重算）
+
+**3. 会员判断链在 Swift 层**
+
+- `Grow.GrowStoreKit` / `Grow.HTTPClient` / `Grow.HealthDataManager` 全是 Swift struct
+  （`/api/methods` 返回 0 个方法，只有 ivar）
+- `Grow.BodyViewController` 只有 5 个 UIViewController 方法，是个空壳
+- 会员 UI 类（`Grow.PremiumCell` 等）只有 UI 元素，状态是外部传入
+
+**4. 用的是 RevenueCat**
+
+`/api/classes?q=RevenueCat` 有 152 个类，其中 `RCPurchases` 是 ObjC 类（150 个方法）：
+
+```
+- cachedCustomerInfo                              @16@0:8
+- getCustomerInfoWithCompletion:                  v24@0:8@?16
+- customerInfoWithCompletionHandler:              v24@0:8@?<v@?@"RCCustomerInfo"@"NSError">16
+- getCustomerInfoWithFetchPolicy:completion:      v32@0:8q16@?24
+```
+
+### 试过但失败的路径（不要重复）
+
+| 路径 | 结果 |
+|---|---|
+| 改 `premium` / `userDetail` 数据 | 界面不刷新；重启后 `premium` 被收据覆盖 |
+| 切 tab 触发 UI 重建 | 无效 |
+| `ui.tapText` 找卡片 | SwiftUI 卡片没有 UIView，找不到 |
+| `ui.tap`（IOHID 真实触摸） | **事件被系统静默丢弃**。`hid.status` 显示符号全就绪、client 创建成功，但 dispatch 后界面无反应。缺 `com.apple.private.hid.client.event-dispatch` entitlement |
+| hook `NSUserDefaults boolForKey:` | **app 崩溃**（第一次） |
+| hook `NSUserDefaults objectForKey:` + argMatch | **app 崩溃**（第二次）。崩溃保护自动把 hooks.json 移到 .bad |
+
+### 结论
+
+**不要 hook NSUserDefaults**。它是 toll-free bridged 的 CFPreferences，替换 IMP 会破坏
+内部状态，两次都崩。参数匹配（argMatch）本身是好的，但用在系统类上救不回来。
+
+### 剩下的可行路径
+
+**A. accessibility 激活**（已实现 `ui.ax` / `ui.axTap`，待验证）
+SwiftUI 会生成 accessibility 元素，`accessibilityActivate` 不依赖 IOHID、不碰系统类。
+如果有效，就能点开卡片看付费墙结构。遍历用 `accessibilityElementCount` /
+`accessibilityElementAtIndex:`，激活前先 `UIAccessibilityPostNotification` 强制建树。
+
+**B. 伪造 RevenueCat 缓存**
+`RCPurchases.cachedCustomerInfo` 返回 `RCCustomerInfo`。改 keychain 里的 customerInfo
+或者 hook 这个方法返回伪造对象。难点：`RCCustomerInfo` 是 Swift 类，构造合法实例需要
+正确的 entitlements 结构；keychain 访问可能需要 keychain-access-groups entitlement。
+
+**C. 静态 patch 二进制**
+定位 `Grow` 主二进制（约 44MB）里判断 `isActive` 的机器码，改成恒真。
+用 Ghidra/IDA 分析，工作量大但不依赖运行时，也不受 Swift 限制。
+
+### 用户已确认
+
+- 那三把锁**是会员限制**，不是"没授权睡眠数据"（用户原话确认）
