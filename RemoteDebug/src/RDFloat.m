@@ -3,6 +3,10 @@
 //  悬浮球：点一下把调试地址复制到剪贴板，方便直接连
 //  长按 3 秒隐藏（免得挡视线）
 //
+//  重要：必须挂在 app 自己的 keyWindow 上，不能用独立 UIWindow。
+//  iOS 在 window 之间不做 hitTest 穿透 —— 透明的全屏 window 会把所有触摸吃掉，
+//  表现就是「界面还在但点不动」。
+//
 
 #import "RD.h"
 #import "RDIcon.h"
@@ -17,7 +21,6 @@ NSString *RDLocalIP(void) {
     struct ifaddrs *ifa = NULL;
     if (getifaddrs(&ifa) != 0) return nil;
 
-    // 优先 en0（WiFi），拿不到再退而求其次
     const char *prefer[] = {"en0", "en1"};
     for (size_t k = 0; k < sizeof(prefer) / sizeof(prefer[0]) && !addr; k++) {
         for (struct ifaddrs *p = ifa; p; p = p->ifa_next) {
@@ -36,7 +39,7 @@ NSString *RDLocalIP(void) {
     return addr;
 }
 
-#pragma mark - 空白处穿透的宿主视图
+#pragma mark - 空白处穿透的容器
 
 @interface RDPassthroughView : UIView
 @end
@@ -44,46 +47,52 @@ NSString *RDLocalIP(void) {
 @implementation RDPassthroughView
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *v = [super hitTest:point withEvent:event];
-    // 点到空白处返回 nil，事件继续传给下层 window，不挡 app 操作
+    // 没点中任何子视图就返回 nil —— 同一个 window 内 UIKit 会继续问下面的兄弟视图，
+    // 所以 app 的界面照常响应
     return (v == self) ? nil : v;
 }
 @end
 
-#pragma mark - 悬浮球
+#pragma mark - 状态
 
-static UIWindow *gFloatWin = nil;
-static UIView   *gFloatBtn = nil;
-static UILabel  *gToast = nil;
-static NSTimer  *gToastTimer = nil;
-static BOOL      gFloatHidden = NO;
+static UIView    *gFloatHost = nil;
+static UIView    *gFloatBtn = nil;
+static UILabel   *gToast = nil;
+static NSTimer   *gToastTimer = nil;
+static NSTimer   *gKeepTopTimer = nil;
 
 static NSString *const kRDFloatX = @"rd.float.x";
 static NSString *const kRDFloatY = @"rd.float.y";
 static NSString *const kRDFloatOff = @"rd.float.off";
 
-static UIWindowScene *RDCurrentScene(void) {
-    for (UIScene *sc in [UIApplication sharedApplication].connectedScenes) {
-        if (![sc isKindOfClass:[UIWindowScene class]]) continue;
-        if (sc.activationState == UISceneActivationStateForegroundActive ||
-            sc.activationState == UISceneActivationStateForegroundInactive) {
-            return (UIWindowScene *)sc;
-        }
+// 保证浮层还在 keyWindow 最上层（app 换页/加视图时可能被盖住）
+static void RDAttachFloatHost(void) {
+    if (!gFloatHost) return;
+    UIWindow *w = RDKeyWindow();
+    if (!w) return;
+
+    if (gFloatHost.superview != w) {
+        [gFloatHost removeFromSuperview];
+        gFloatHost.frame = w.bounds;
+        [w addSubview:gFloatHost];
+    } else if (w.subviews.lastObject != gFloatHost) {
+        [w bringSubviewToFront:gFloatHost];
     }
-    return nil;
 }
 
 static void RDShowToast(NSString *text) {
-    if (!gFloatWin || !gToast) return;
-    gToast.text = text;
+    if (!gFloatHost || !gToast) return;
+    RDAttachFloatHost();
 
-    CGFloat maxW = gFloatWin.bounds.size.width - 64;
+    gToast.text = text;
+    CGFloat maxW = gFloatHost.bounds.size.width - 64;
     CGSize sz = [gToast sizeThatFits:CGSizeMake(maxW, CGFLOAT_MAX)];
     CGFloat w = MIN(sz.width + 28, maxW);
     CGFloat h = sz.height + 22;
-    gToast.frame = CGRectMake((gFloatWin.bounds.size.width - w) / 2.0,
-                              gFloatWin.bounds.size.height * 0.42,
+    gToast.frame = CGRectMake((gFloatHost.bounds.size.width - w) / 2.0,
+                              gFloatHost.bounds.size.height * 0.40,
                               w, h);
-    [gFloatWin bringSubviewToFront:gToast];
+    [gFloatHost bringSubviewToFront:gToast];
 
     [UIView animateWithDuration:0.15 animations:^{ gToast.alpha = 1.0; }];
     [gToastTimer invalidate];
@@ -96,35 +105,34 @@ static void RDShowToast(NSString *text) {
     }];
 }
 
-// 点一下：复制地址
 static void RDFloatTap(void) {
     NSString *ip = RDLocalIP();
-    extern int RDCurrentPortPub(void);
     int port = RDCurrentPortPub();
-    NSString *url = ip.length
-        ? [NSString stringWithFormat:@"http://%@:%d", ip, port]
-        : [NSString stringWithFormat:@"未获取到 WiFi IP（端口 %d）", port];
-
     if (ip.length) {
+        NSString *url = [NSString stringWithFormat:@"http://%@:%d", ip, port];
         [UIPasteboard generalPasteboard].string = url;
         RDShowToast([NSString stringWithFormat:@"已复制\n%@", url]);
+        RDLogAppend([NSString stringWithFormat:@"[FLOAT] 已复制 %@", url]);
     } else {
-        RDShowToast(url);
+        RDShowToast([NSString stringWithFormat:@"未取到 WiFi IP\n端口 %d", port]);
+        RDLogAppend(@"[FLOAT] 未取到 WiFi IP");
     }
-    RDLogAppend([NSString stringWithFormat:@"[FLOAT] %@", url]);
 }
 
-// 长按：隐藏 / 恢复
 static void RDFloatLongPress(void) {
-    gFloatHidden = YES;
     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:kRDFloatOff];
+    [gKeepTopTimer invalidate];
     [UIView animateWithDuration:0.2 animations:^{
-        gFloatBtn.alpha = 0.0;
+        gFloatHost.alpha = 0.0;
     } completion:^(BOOL f) {
-        gFloatBtn.hidden = YES;
-        RDShowToast(@"悬浮球已隐藏\n重开 app 恢复");
+        [gFloatHost removeFromSuperview];
+        gFloatHost = nil;
+        gFloatBtn = nil;
     }];
+    RDLogAppend(@"[FLOAT] 已隐藏（重开 app 恢复）");
 }
+
+#pragma mark - 手势
 
 @interface RDFloatController : NSObject
 @end
@@ -145,9 +153,7 @@ static void RDFloatLongPress(void) {
     UIView *host = btn.superview;
     if (!btn || !host) return;
 
-    if (g.state == UIGestureRecognizerStateBegan) {
-        _panStart = btn.center;
-    }
+    if (g.state == UIGestureRecognizerStateBegan) _panStart = btn.center;
 
     CGPoint t = [g translationInView:host];
     btn.center = CGPointMake(_panStart.x + t.x, _panStart.y + t.y);
@@ -167,9 +173,7 @@ static void RDFloatLongPress(void) {
         [[NSUserDefaults standardUserDefaults] setDouble:sx forKey:kRDFloatX];
         [[NSUserDefaults standardUserDefaults] setDouble:sy forKey:kRDFloatY];
 
-        if (fabs(t.x) < 9 && fabs(t.y) < 9) {
-            RDFloatTap();
-        }
+        if (fabs(t.x) < 9 && fabs(t.y) < 9) RDFloatTap();
     }
 }
 
@@ -183,33 +187,22 @@ static void RDFloatLongPress(void) {
 
 void RDInstallFloatButton(void) {
     RDRunOnMain(^id{
-        if (gFloatWin) return (id)nil;
-
-        UIWindowScene *scene = RDCurrentScene();
-        if (!scene) return (id)nil;
-
-        // 用户长按隐藏过就尊重它
+        if (gFloatHost) { RDAttachFloatHost(); return (id)nil; }
         if ([[NSUserDefaults standardUserDefaults] boolForKey:kRDFloatOff]) {
-            RDLogAppend(@"[FLOAT] 之前被隐藏，跳过");
+            RDLogAppend(@"[FLOAT] 之前被长按隐藏，本次不显示");
             return (id)nil;
         }
 
-        CGRect bounds = scene.coordinateSpace.bounds;
+        UIWindow *w = RDKeyWindow();
+        if (!w) return (id)nil;
 
-        UIWindow *w = [[UIWindow alloc] initWithWindowScene:scene];
-        w.frame = bounds;
-        w.windowLevel = UIWindowLevelAlert + 200;
-        w.backgroundColor = [UIColor clearColor];
-        w.hidden = NO;
+        CGRect bounds = w.bounds;
 
         RDPassthroughView *host = [[RDPassthroughView alloc] initWithFrame:bounds];
         host.backgroundColor = [UIColor clearColor];
+        host.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
-        UIViewController *vc = [UIViewController new];
-        vc.view = host;
-        w.rootViewController = vc;
-
-        // ---- 球本体
+        // ---- 球
         CGFloat side = 58;
         CGFloat x = [[NSUserDefaults standardUserDefaults] doubleForKey:kRDFloatX];
         CGFloat y = [[NSUserDefaults standardUserDefaults] doubleForKey:kRDFloatY];
@@ -274,13 +267,23 @@ void RDInstallFloatButton(void) {
         t.alpha = 0.0;
         t.userInteractionEnabled = NO;
         [host addSubview:t];
+
+        [w addSubview:host];
+
+        gFloatHost = host;
+        gFloatBtn = btn;
         gToast = t;
 
-        gFloatWin = w;
-        gFloatBtn = btn;
+        // 定期确保还在最上层（app 内部可能频繁重建视图）
+        gKeepTopTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                        repeats:YES
+                                                          block:^(NSTimer *tm) {
+            if (!gFloatHost) { [tm invalidate]; return; }
+            RDAttachFloatHost();
+        }];
 
-        RDLogAppend([NSString stringWithFormat:
-                     @"[FLOAT] 悬浮球已显示  ip=%@", RDLocalIP() ?: @"?"]);
+        RDLogAppend([NSString stringWithFormat:@"[FLOAT] 悬浮球已挂到 keyWindow  ip=%@",
+                     RDLocalIP() ?: @"?"]);
         return (id)nil;
     });
 }
